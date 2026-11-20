@@ -597,18 +597,12 @@ static void mix(void *buffer, int samples)
             const int32x4_t volume_l_vec = vdupq_n_s32(volume_l);
             const int32x4_t volume_r_vec = vdupq_n_s32(volume_r);
             while (dest < dest_limit) {
-#ifndef SIL_ARCH_ARM_64
+                /* The intrinsics are used on all architectures: inline
+                 * "ld2"/"st2" with separate "w" operands is wrong, since
+                 * the compiler need not allocate consecutive registers
+                 * (GCC on AArch64 doesn't, and the assembler rejects it). */
                 const int16x4x2_t sample_16 = vld2_s16(src);
                 src += 8;
-#else
-                /* Clang doesn't seem to know about post-indexed addressing
-                 * mode for {ld,st}[1234], so we need to help it out. */
-                int16x4x2_t sample_16;
-                __asm__("ld2 {%0.4h, %1.4h}, [%2], #16"
-                        : "=w" (sample_16.val[0]), "=w" (sample_16.val[1]),
-                          "=r" (src)
-                        : "2" (src), "m" (*src));
-#endif
                 int32x4x2_t accum = vld2q_s32(dest);
                 int32x4_t left = vshll_n_s16(sample_16.val[0], 15);
                 int32x4_t right = vshll_n_s16(sample_16.val[1], 15);
@@ -618,14 +612,8 @@ static void mix(void *buffer, int samples)
                     vrsraq_n_s32(accum.val[0], left, stereo_shift);
                 accum.val[1] =
                     vrsraq_n_s32(accum.val[1], right, stereo_shift);
-#ifndef SIL_ARCH_ARM_64
                 vst2q_s32(dest, accum);
                 dest += 8;
-#else
-                __asm__("st2 {%2.4s, %3.4s}, [%0], #32"
-                        : "=r" (dest), "=m" (*dest)
-                        : "w" (accum.val[0]), "w" (accum.val[1]), "0" (dest));
-#endif
             }
             #undef stereo_shift
 
@@ -684,14 +672,8 @@ static void mix(void *buffer, int samples)
                 const int32x4_t right = vqdmulhq_s32(sample_32, volume_r_vec);
                 accum.val[0] = vrsraq_n_s32(accum.val[0], left, mono_shift);
                 accum.val[1] = vrsraq_n_s32(accum.val[1], right, mono_shift);
-#ifndef SIL_ARCH_ARM_64
                 vst2q_s32(dest, accum);
                 dest += 8;
-#else
-                __asm__("st2 {%2.4s, %3.4s}, [%0], #32"
-                        : "=r" (dest), "=m" (*dest)
-                        : "w" (accum.val[0]), "w" (accum.val[1]), "0" (dest));
-#endif
             }
             #undef mono_shift
         }

@@ -21,7 +21,7 @@
 #elif defined(__x86_64__)
 # define SIL_ARCH_X86
 # define SIL_ARCH_X86_64
-#elif defined(__arm__)
+#elif defined(__arm__) || defined(__aarch64__)
 # define SIL_ARCH_ARM
 # if defined(__aarch64__)
 #  define SIL_ARCH_ARM_64
