@@ -75,15 +75,27 @@
     if (forRendering) {
         /* Save this as the primary context. */
         context = new_context;
-        /* Associate the context with the view. */
-        [context setView:self];
-        /* Ensure that the context's drawable references are appropriately
-         * updated.  (One assumes -[setView:] would do this, but in rare
-         * cases, the context starts raising GL_INVALID_FRAMEBUFFER_OPERATION
-         * on draw operations.  SDL2 includes an explicit -[update] after
-         * -[setView:], though without documentation of why, so we do the
-         * same in an attempt to mitigate the problem.) */
-        [context update];
+        /* Associate the context with the view.  Modern versions of macOS
+         * (at least 26+) raise an exception if -[setView:] or -[update]
+         * is called from any thread other than the main thread, so
+         * dispatch these calls to the main thread. */
+        NSOpenGLContext *ctx = context;
+        void (^attach)(void) = ^{
+            [ctx setView:self];
+            /* Ensure that the context's drawable references are
+             * appropriately updated.  (One assumes -[setView:] would do
+             * this, but in rare cases, the context starts raising
+             * GL_INVALID_FRAMEBUFFER_OPERATION on draw operations.  SDL2
+             * includes an explicit -[update] after -[setView:], though
+             * without documentation of why, so we do the same in an
+             * attempt to mitigate the problem.) */
+            [ctx update];
+        };
+        if ([NSThread isMainThread]) {
+            attach();
+        } else {
+            dispatch_sync(dispatch_get_main_queue(), attach);
+        }
     }
 
     return TRUE;
@@ -98,9 +110,18 @@
         return;  // No update was pending.
     }
 
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-    [context update];
-    [pool release];
+    NSOpenGLContext *ctx = context;
+    void (^do_update)(void) = ^{
+        NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+        [ctx update];
+        [pool release];
+    };
+    /* As above, -[update] must be called on the main thread. */
+    if ([NSThread isMainThread]) {
+        do_update();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), do_update);
+    }
 }
 
 /*-----------------------------------------------------------------------*/
