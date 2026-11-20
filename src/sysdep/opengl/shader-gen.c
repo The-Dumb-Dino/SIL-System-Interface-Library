@@ -165,6 +165,7 @@ int sys_(graphics_set_shader_generator)(
     void *vertex_source_callback, void *fragment_source_callback,
     void *key_callback, int hash_table_size, int dynamic_resize)
 {
+    OPENGL_BATCH_FLUSH();
     opengl_clear_generated_shaders();
 
     if (vertex_source_callback) {
@@ -195,6 +196,7 @@ int sys_(graphics_set_shader_generator)(
 
 int sys_(graphics_add_shader_uniform)(const char *name)
 {
+    OPENGL_BATCH_FLUSH();
     if (strncmp(name, "gl_", 3) == 0) {
         DLOG("Invalid uniform name: %s", name);
         return 0;
@@ -238,6 +240,7 @@ int sys_(graphics_add_shader_uniform)(const char *name)
 
 int sys_(graphics_add_shader_attribute)(const char *name, int size)
 {
+    OPENGL_BATCH_FLUSH();
     /* The OpenGL ES spec mandates at least 8 vertex attributes (desktop GL
      * mandates 16). */
     const int MAX_VERTEX_ATTRIBS_MIN = 8;
@@ -309,6 +312,7 @@ int sys_(graphics_add_shader_attribute)(const char *name, int size)
 
 void sys_(graphics_set_shader_uniform_int)(int uniform, int value)
 {
+    OPENGL_BATCH_FLUSH();
     if (uniform < 1 || uniform > num_user_uniforms) {
         DLOG("Invalid uniform ID: %d", uniform);
         return;
@@ -334,6 +338,7 @@ void sys_(graphics_set_shader_uniform_int)(int uniform, int value)
 
 void sys_(graphics_set_shader_uniform_float)(int uniform, float value)
 {
+    OPENGL_BATCH_FLUSH();
     if (uniform < 1 || uniform > num_user_uniforms) {
         DLOG("Invalid uniform ID: %d", uniform);
         return;
@@ -359,6 +364,7 @@ void sys_(graphics_set_shader_uniform_float)(int uniform, float value)
 
 void sys_(graphics_set_shader_uniform_vec2)(int uniform, const Vector2f *value)
 {
+    OPENGL_BATCH_FLUSH();
     if (uniform < 1 || uniform > num_user_uniforms) {
         DLOG("Invalid uniform ID: %d", uniform);
         return;
@@ -384,6 +390,7 @@ void sys_(graphics_set_shader_uniform_vec2)(int uniform, const Vector2f *value)
 
 void sys_(graphics_set_shader_uniform_vec3)(int uniform, const Vector3f *value)
 {
+    OPENGL_BATCH_FLUSH();
     if (uniform < 1 || uniform > num_user_uniforms) {
         DLOG("Invalid uniform ID: %d", uniform);
         return;
@@ -409,6 +416,7 @@ void sys_(graphics_set_shader_uniform_vec3)(int uniform, const Vector3f *value)
 
 void sys_(graphics_set_shader_uniform_vec4)(int uniform, const Vector4f *value)
 {
+    OPENGL_BATCH_FLUSH();
     if (uniform < 1 || uniform > num_user_uniforms) {
         DLOG("Invalid uniform ID: %d", uniform);
         return;
@@ -434,6 +442,7 @@ void sys_(graphics_set_shader_uniform_vec4)(int uniform, const Vector4f *value)
 
 void sys_(graphics_set_shader_uniform_mat4)(int uniform, const Matrix4f *value)
 {
+    OPENGL_BATCH_FLUSH();
     if (uniform < 1 || uniform > num_user_uniforms) {
         DLOG("Invalid uniform ID: %d", uniform);
         return;

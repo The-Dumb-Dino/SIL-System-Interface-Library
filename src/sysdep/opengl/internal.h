@@ -187,6 +187,19 @@ struct SysPrimitive {
     /* Vertex data structure size (in bytes per vertex) and count. */
     int vertex_size, vertex_count;
 
+    /* Batched immediate-mode primitive (see batch.c): the primitive has no
+     * GL resources; its data is merged into the current batch when drawn.
+     * The data pointers belong to the caller and are only valid until the
+     * primitive is drawn. */
+    uint8_t is_batched;
+    uint8_t batch_isize;
+    int batch_sil_type;
+    const void *batch_vdata;
+    const uint32_t *batch_format;
+    int batch_vsize, batch_vcount;
+    const void *batch_idata;
+    int batch_icount;
+
     /* Vertex position information. */
     GLint position_size;        // Number of components (2, 3, or 4).
     GLenum position_type;       // GL_* data type.
@@ -408,6 +421,56 @@ extern void opengl_delete_vertex_array(GLuint object);
  * This routine does nothing if vertex buffers are not enabled (i.e.,
  * neither of the OPENGL_FEATURE_FAST_{STATIC,DYNAMIC}_VBO flags are set).
  */
+/*------------------------------- batch.c -------------------------------*/
+
+/**
+ * opengl_batch_pending:  True if immediate-mode primitives are waiting in
+ * the batch buffer (see batch.c).
+ */
+extern uint8_t opengl_batch_pending;
+
+/**
+ * OPENGL_BATCH_FLUSH:  Draw any pending batched primitives.  Must be
+ * called by every sysdep entry point before it changes render state or
+ * reads back rendered data.
+ */
+#define OPENGL_BATCH_FLUSH()  do {          \
+    if (UNLIKELY(opengl_batch_pending)) {   \
+        opengl_batch_flush();               \
+    }                                       \
+} while (0)
+
+/**
+ * opengl_batch_create:  Return a batched primitive for the given
+ * immediate-mode data, or NULL if the primitive cannot be batched.
+ */
+extern SysPrimitive *opengl_batch_create(
+    int type, const void *data, const uint32_t *format, int size, int count,
+    const void *index_data, int index_size, int index_count);
+
+/**
+ * opengl_batch_draw:  Add a batched primitive to the batch.  Returns false
+ * if the primitive must be drawn normally instead (partial draws).
+ */
+extern int opengl_batch_draw(SysPrimitive *primitive, int start, int count);
+
+/** opengl_batch_flush:  Draw and clear the current batch. */
+extern void opengl_batch_flush(void);
+
+/**
+ * opengl_batch_texture_apply:  Defer a unit-0 texture binding while a
+ * batch is pending.  Returns true if the binding was deferred.
+ */
+extern int opengl_batch_texture_apply(SysTexture *texture);
+
+/** opengl_batch_texture_destroyed:  Forget references to a texture. */
+extern void opengl_batch_texture_destroyed(SysTexture *texture);
+
+/** opengl_batch_cleanup:  Free batch buffers. */
+extern void opengl_batch_cleanup(void);
+
+/*-----------------------------------------------------------------------*/
+
 extern void opengl_primitive_reset_bindings(void);
 
 /**

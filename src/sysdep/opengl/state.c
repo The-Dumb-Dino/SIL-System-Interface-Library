@@ -170,6 +170,7 @@ static void update_fog_params(void);
 
 void sys_(graphics_set_viewport)(int left, int bottom, int width, int height)
 {
+    OPENGL_BATCH_FLUSH();
     viewport_left   = left;
     viewport_bottom = bottom;
     viewport_width  = width;
@@ -181,6 +182,7 @@ void sys_(graphics_set_viewport)(int left, int bottom, int width, int height)
 
 void sys_(graphics_set_clip_region)(int left, int bottom, int width, int height)
 {
+    OPENGL_BATCH_FLUSH();
     clip_left   = left;
     clip_bottom = bottom;
     clip_width  = width;
@@ -192,6 +194,7 @@ void sys_(graphics_set_clip_region)(int left, int bottom, int width, int height)
 
 void sys_(graphics_set_depth_range)(float near, float far)
 {
+    OPENGL_BATCH_FLUSH();
     depth_near = near;
     depth_far  = far;
 #ifdef SIL_OPENGL_ES
@@ -205,6 +208,7 @@ void sys_(graphics_set_depth_range)(float near, float far)
 
 int sys_(graphics_set_blend)(int operation, int src_factor, int dest_factor)
 {
+    OPENGL_BATCH_FLUSH();
     GLenum op = GL_INVALID_ENUM;  // Detect invalid input.
     switch ((GraphicsBlendOperation)operation) {
         case GRAPHICS_BLEND_ADD:  op = GL_FUNC_ADD;              break;
@@ -228,6 +232,7 @@ int sys_(graphics_set_blend)(int operation, int src_factor, int dest_factor)
 
 int sys_(graphics_set_blend_alpha)(int enable, int src_factor, int dest_factor)
 {
+    OPENGL_BATCH_FLUSH();
     const GLenum src = convert_blend_factor(src_factor);
     const GLenum dest = convert_blend_factor(dest_factor);
     ASSERT(src != GL_INVALID_ENUM, return 0);
@@ -244,6 +249,7 @@ int sys_(graphics_set_blend_alpha)(int enable, int src_factor, int dest_factor)
 
 void sys_(graphics_set_int_param)(SysGraphicsParam id, int value)
 {
+    OPENGL_BATCH_FLUSH();
     switch (id) {
 
       case SYS_GRAPHICS_PARAM_ALPHA_TEST:
@@ -420,6 +426,7 @@ void sys_(graphics_set_int_param)(SysGraphicsParam id, int value)
 
 void sys_(graphics_set_float_param)(SysGraphicsParam id, float value)
 {
+    OPENGL_BATCH_FLUSH();
     switch (id) {
 
       case SYS_GRAPHICS_PARAM_ALPHA_REFERENCE:
@@ -486,6 +493,7 @@ void sys_(graphics_set_float_param)(SysGraphicsParam id, float value)
 
 void sys_(graphics_set_vec2_param)(SysGraphicsParam id, const Vector2f *value)
 {
+    OPENGL_BATCH_FLUSH();
     switch (id) {
 
       case SYS_GRAPHICS_PARAM_TEXTURE_OFFSET:
@@ -534,6 +542,7 @@ void sys_(graphics_set_vec2_param)(SysGraphicsParam id, const Vector2f *value)
 
 void sys_(graphics_set_vec4_param)(SysGraphicsParam id, const Vector4f *value)
 {
+    OPENGL_BATCH_FLUSH();
     switch (id) {
 
       case SYS_GRAPHICS_PARAM_BLEND_COLOR:
@@ -616,6 +625,7 @@ void sys_(graphics_set_vec4_param)(SysGraphicsParam id, const Vector4f *value)
 
 void sys_(graphics_set_matrix_param)(SysGraphicsParam id, const Matrix4f *value)
 {
+    OPENGL_BATCH_FLUSH();
     switch (id) {
 
       case SYS_GRAPHICS_PARAM_PROJECTION_MATRIX:
@@ -740,6 +750,7 @@ float sys_(graphics_max_point_size)(void)
 
 int sys_(graphics_enable_shader_objects)(void)
 {
+    OPENGL_BATCH_FLUSH();
     opengl_deselect_shader();
     opengl_shader_objects_enabled = 1;
     return 1;
@@ -749,6 +760,7 @@ int sys_(graphics_enable_shader_objects)(void)
 
 int sys_(graphics_disable_shader_objects)(void)
 {
+    OPENGL_BATCH_FLUSH();
     sys_(shader_pipeline_apply)(NULL);
     opengl_shader_objects_enabled = 0;
     return 1;

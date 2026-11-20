@@ -219,6 +219,7 @@ const char *sys_(graphics_renderer_info)(void)
 void sys_(graphics_clear)(const Vector4f *color, const float *depth,
                           unsigned int stencil)
 {
+    OPENGL_BATCH_FLUSH();
 #ifdef SIL_PLATFORM_WINDOWS
     /* Hack for broken OpenGL drivers (e.g. VMware) which can execute a
      * clear operation out-of-order with respect to pending draw operations. */
@@ -244,6 +245,7 @@ void sys_(graphics_clear)(const Vector4f *color, const float *depth,
 int sys_(graphics_read_pixels)(int x, int y, int w, int h, int stride,
                                void *buffer)
 {
+    OPENGL_BATCH_FLUSH();
     opengl_clear_error();
 
     /* Protect ourselves from broken GL implementations that choke on
@@ -530,6 +532,7 @@ int opengl_init(int width, int height, uint32_t features)
 
 void opengl_cleanup(void)
 {
+    opengl_batch_cleanup();
     opengl_primitive_cleanup();
     opengl_clear_generated_shaders();
     shader_table_init(0, 1);  // Ensure the table memory is also freed.
@@ -709,6 +712,7 @@ void opengl_set_display_size(int width, int height)
 
 void opengl_start_frame(void)
 {
+    opengl_batch_flush();
     opengl_primitive_reset_bindings();
 }
 
@@ -716,6 +720,7 @@ void opengl_start_frame(void)
 
 void opengl_sync(void)
 {
+    opengl_batch_flush();
     glFinish();
 }
 

@@ -828,6 +828,9 @@ void sys_graphics_start_frame(int *width_ret, int *height_ret)
 
 void sys_graphics_finish_frame(void)
 {
+    /* Draw any batched primitives before presenting the frame. */
+    opengl_batch_flush();
+
     if (!window) {
         return;
     }

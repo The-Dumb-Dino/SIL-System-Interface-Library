@@ -108,6 +108,7 @@ SysTexture *sys_(texture_create)(
     void *data, int stride, const int32_t *level_offsets,
     const int32_t *level_sizes, int mipmaps, int mem_flags, int reuse)
 {
+    OPENGL_BATCH_FLUSH();
     /* Determine the GL format parameters for the texture. */
 
     GLenum gl_internalformat, gl_format, gl_type;
@@ -748,6 +749,8 @@ SysTexture *sys_(texture_create)(
 
 void sys_(texture_destroy)(SysTexture *texture)
 {
+    OPENGL_BATCH_FLUSH();
+    opengl_batch_texture_destroyed(texture);
     if (texture->generation == opengl_device_generation) {
         if (opengl_current_texture_id == texture->id) {
             glBindTextureUnit(0, 0);
@@ -793,6 +796,7 @@ int sys_(texture_has_mipmaps)(SysTexture *texture)
 SysTexture *sys_(texture_grab)(int x, int y, int w, int h,
                                UNUSED int readable, int mipmaps, int mem_flags)
 {
+    OPENGL_BATCH_FLUSH();
     SysTexture *texture = mem_alloc(sizeof(*texture), 0, mem_flags);
     if (UNLIKELY(!texture)) {
         DLOG("Failed to allocate SysTexture");
@@ -909,6 +913,7 @@ SysTexture *sys_(texture_grab)(int x, int y, int w, int h,
 void *sys_(texture_lock)(SysTexture *texture, SysTextureLockMode lock_mode,
                          int x, int y, int w, int h)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(texture->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated texture %p", texture);
         return NULL;
@@ -1016,6 +1021,7 @@ void *sys_(texture_lock)(SysTexture *texture, SysTextureLockMode lock_mode,
 
 void sys_(texture_unlock)(SysTexture *texture, int update)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(texture->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated texture %p", texture);
         return;
@@ -1033,6 +1039,7 @@ void sys_(texture_unlock)(SysTexture *texture, int update)
 
 void sys_(texture_flush)(SysTexture *texture)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(texture->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated texture %p", texture);
         return;
@@ -1050,6 +1057,7 @@ void sys_(texture_flush)(SysTexture *texture)
 
 void sys_(texture_set_repeat)(SysTexture *texture, int repeat_u, int repeat_v)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(texture->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated texture %p", texture);
         return;
@@ -1076,6 +1084,7 @@ void sys_(texture_set_repeat)(SysTexture *texture, int repeat_u, int repeat_v)
 
 void sys_(texture_set_antialias)(SysTexture *texture, int on)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(texture->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated texture %p", texture);
         return;
@@ -1110,6 +1119,11 @@ void sys_(texture_apply)(int unit, SysTexture *texture)
         DLOG("Attempt to use invalidated texture %p", texture);
         return;
     }
+
+    if (unit == 0 && opengl_batch_texture_apply(texture)) {
+        return;  // Binding deferred until the pending batch is drawn.
+    }
+    OPENGL_BATCH_FLUSH();
 
     opengl_clear_error();
     if (unit > 0) {

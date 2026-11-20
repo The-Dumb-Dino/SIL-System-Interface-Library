@@ -414,6 +414,13 @@ extern void opengl_start_frame(void);
 extern void opengl_sync(void);
 
 /**
+ * opengl_batch_flush:  Draw any immediate-mode primitives still waiting
+ * in the batch buffer.  System-specific code must call this before
+ * presenting a frame (swapping buffers).
+ */
+extern void opengl_batch_flush(void);
+
+/**
  * opengl_free_dead_resources:  Free all resources which were destroyed
  * since the last call to this function.  If the DELAYED_DELETE feature
  * flag is passed to opengl_init(), the system-dependent code must

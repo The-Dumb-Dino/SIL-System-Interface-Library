@@ -44,6 +44,7 @@ SysFramebuffer *sys_(framebuffer_create)(
     int width, int height, FramebufferColorType color_type,
     int depth_bits, int stencil_bits)
 {
+    OPENGL_BATCH_FLUSH();
     /* If the OpenGL framebuffer extension is not available, we can't do
      * anything. */
 
@@ -265,6 +266,7 @@ SysFramebuffer *sys_(framebuffer_create)(
 
 void sys_(framebuffer_destroy)(SysFramebuffer *framebuffer)
 {
+    OPENGL_BATCH_FLUSH();
     if (current_framebuffer == framebuffer) {
         sys_(framebuffer_bind)(NULL);
     }
@@ -288,6 +290,7 @@ void sys_(framebuffer_destroy)(SysFramebuffer *framebuffer)
 
 void sys_(framebuffer_bind)(SysFramebuffer *framebuffer)
 {
+    OPENGL_BATCH_FLUSH();
     if (opengl_has_features(OPENGL_FEATURE_FRAMEBUFFERS)) {
         if (framebuffer) {
             if (LIKELY(framebuffer->generation == opengl_device_generation)) {
@@ -315,6 +318,7 @@ SysTexture *sys_(framebuffer_get_texture)(SysFramebuffer *framebuffer)
 
 void sys_(framebuffer_set_antialias)(SysFramebuffer *framebuffer, int on)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(framebuffer->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated framebuffer %p", framebuffer);
         return;
@@ -339,6 +343,7 @@ void sys_(framebuffer_set_antialias)(SysFramebuffer *framebuffer, int on)
 
 void sys_(framebuffer_discard_data)(SysFramebuffer *framebuffer)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(framebuffer->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated framebuffer %p", framebuffer);
         return;

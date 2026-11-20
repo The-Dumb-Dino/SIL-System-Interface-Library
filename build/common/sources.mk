@@ -316,7 +316,8 @@ SIL_OBJECTS = $(SIL_SYS_OBJECTS:%=$(SIL_DIR)/src/%)
 # Define the OpenGL sources here for convenience, since we use them in
 # multiple build.mk files.  This is intended to be included in a
 # $(SIL_SYS_SOURCES) definition.
-SIL_OPENGL_SOURCES = sysdep/opengl/dsa.c \
+SIL_OPENGL_SOURCES = sysdep/opengl/batch.c \
+                     sysdep/opengl/dsa.c \
                      sysdep/opengl/dyngl.c \
                      sysdep/opengl/framebuffer.c \
                      sysdep/opengl/graphics.c \

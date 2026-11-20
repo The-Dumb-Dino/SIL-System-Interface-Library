@@ -160,6 +160,7 @@ int sys_(shader_max_attributes)(void)
 
 int sys_(shader_set_attribute)(int index, const char *name)
 {
+    OPENGL_BATCH_FLUSH();
     int retval = 1;
     mem_free(attribute_bindings[index]);
     attribute_bindings[index] = NULL;
@@ -203,6 +204,7 @@ int sys_(shader_set_attribute)(int index, const char *name)
 
 void sys_(shader_bind_standard_attribute)(ShaderAttribute attribute, int index)
 {
+    OPENGL_BATCH_FLUSH();
     if (index >= 0 && index < 256) {
         standard_attribute_bindings[attribute] = index + 1;
     } else {
@@ -214,6 +216,7 @@ void sys_(shader_bind_standard_attribute)(ShaderAttribute attribute, int index)
 
 void sys_(shader_clear_attributes)(void)
 {
+    OPENGL_BATCH_FLUSH();
     for (int i = 0; i < num_attribute_bindings; i++) {
         mem_free(attribute_bindings[i]);
         attribute_bindings[i] = NULL;
@@ -230,6 +233,7 @@ void sys_(shader_clear_attributes)(void)
 SysShader *sys_(shader_create)(ShaderType type, const void *data, int size,
                              int is_binary)
 {
+    OPENGL_BATCH_FLUSH();
     GLenum gl_type = GL_INVALID_ENUM;
     switch (type) {
         case SHADER_TYPE_VERTEX:   gl_type = GL_VERTEX_SHADER;   break;
@@ -384,6 +388,7 @@ SysShader *sys_(shader_create)(ShaderType type, const void *data, int size,
 
 void sys_(shader_destroy)(SysShader *shader)
 {
+    OPENGL_BATCH_FLUSH();
     const int is_current = (shader->generation == opengl_device_generation);
 
     for (SysShaderPipeline *pipeline = shader->pipelines, *next; pipeline;
@@ -621,6 +626,7 @@ int sys_(shader_get_uniform_id)(SysShader *shader, const char *name)
 
 void sys_(shader_set_uniform_int)(SysShader *shader, int uniform, int value)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(shader->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated shader %p", shader);
         return;
@@ -633,6 +639,7 @@ void sys_(shader_set_uniform_int)(SysShader *shader, int uniform, int value)
 void sys_(shader_set_uniform_float)(
     SysShader *shader, int uniform, float value)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(shader->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated shader %p", shader);
         return;
@@ -645,6 +652,7 @@ void sys_(shader_set_uniform_float)(
 void sys_(shader_set_uniform_vec2)(
     SysShader *shader, int uniform, const Vector2f *value)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(shader->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated shader %p", shader);
         return;
@@ -657,6 +665,7 @@ void sys_(shader_set_uniform_vec2)(
 void sys_(shader_set_uniform_vec3)(
     SysShader *shader, int uniform, const Vector3f *value)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(shader->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated shader %p", shader);
         return;
@@ -669,6 +678,7 @@ void sys_(shader_set_uniform_vec3)(
 void sys_(shader_set_uniform_vec4)(
     SysShader *shader, int uniform, const Vector4f *value)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(shader->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated shader %p", shader);
         return;
@@ -681,6 +691,7 @@ void sys_(shader_set_uniform_vec4)(
 void sys_(shader_set_uniform_mat4)(
     SysShader *shader, int uniform, const Matrix4f *value)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(shader->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated shader %p", shader);
         return;
@@ -695,6 +706,7 @@ void sys_(shader_set_uniform_mat4)(
 SysShaderPipeline *sys_(shader_pipeline_create)(
     SysShader *vertex_shader, SysShader *fragment_shader)
 {
+    OPENGL_BATCH_FLUSH();
     if (UNLIKELY(vertex_shader->type != SHADER_TYPE_VERTEX)) {
         DLOG("Invalid type %d for vertex shader", vertex_shader->type);
         goto error_return;
@@ -785,6 +797,7 @@ SysShaderPipeline *sys_(shader_pipeline_create)(
 
 void sys_(shader_pipeline_destroy)(SysShaderPipeline *pipeline)
 {
+    OPENGL_BATCH_FLUSH();
     if (current_pipeline == pipeline) {
         sys_(shader_pipeline_apply)(NULL);
     }
@@ -818,6 +831,7 @@ void sys_(shader_pipeline_destroy)(SysShaderPipeline *pipeline)
 
 void sys_(shader_pipeline_apply)(SysShaderPipeline *pipeline)
 {
+    OPENGL_BATCH_FLUSH();
     if (pipeline
      && UNLIKELY(pipeline->generation != opengl_device_generation)) {
         DLOG("Attempt to use invalidated shader pipeline %p", pipeline);

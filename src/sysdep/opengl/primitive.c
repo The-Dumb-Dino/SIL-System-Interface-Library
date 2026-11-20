@@ -36,6 +36,9 @@ static GLuint immediate_vertex_buffers[SIL_OPENGL_IMMEDIATE_VERTEX_BUFFERS];
 /* Current buffer sizes of each buffer object, in bytes. */
 static int immediate_vbo_sizes[lenof(immediate_vertex_buffers)];
 
+/* Set to force immediate-mode primitives to bypass batching. */
+static uint8_t batch_bypass;
+
 /* Index of next immediate-mode vertex buffer to use. */
 static int next_immediate_vbo = 0;
 
@@ -134,6 +137,17 @@ SysPrimitive *sys_(graphics_create_primitive)(
     int size, int count, const void *index_data, int index_size,
     int index_count, int immediate)
 {
+    /* Try to merge immediate-mode primitives into the current batch. */
+    if (immediate && !batch_bypass) {
+        SysPrimitive *batched = opengl_batch_create(
+            type, data, format, size, count, index_data, index_size,
+            index_data ? index_count : 0);
+        if (batched) {
+            return batched;
+        }
+    }
+    OPENGL_BATCH_FLUSH();
+
     int need_quad_indices = 0;    // Set true if we need to generate indices.
     void *quad_index_data = NULL; // Freed (if not NULL) on return.
 
@@ -213,6 +227,7 @@ SysPrimitive *sys_(graphics_create_primitive)(
     primitive->converted_quads  = converted_quads;
     primitive->has_indices      = (index_data != NULL);
     primitive->is_immediate_vbo = 0;
+    primitive->is_batched       = 0;
     primitive->is_single_quad   = 0;
     primitive->vertex_buffer    = 0;
     primitive->vertex_data      = NULL;
@@ -622,6 +637,27 @@ void sys_(graphics_draw_primitive)(SysPrimitive *primitive,
         return;
     }
 
+    if (primitive->is_batched) {
+        if (opengl_batch_draw(primitive, start, count)) {
+            return;
+        }
+        /* Not batchable after all (partial draw): draw it normally. */
+        OPENGL_BATCH_FLUSH();
+        batch_bypass = 1;
+        SysPrimitive *real = sys_(graphics_create_primitive)(
+            primitive->batch_sil_type, primitive->batch_vdata,
+            primitive->batch_format, primitive->batch_vsize,
+            primitive->batch_vcount, primitive->batch_idata,
+            primitive->batch_isize, primitive->batch_icount, 1);
+        batch_bypass = 0;
+        if (real) {
+            sys_(graphics_draw_primitive)(real, start, count);
+            sys_(graphics_destroy_primitive)(real);
+        }
+        return;
+    }
+    OPENGL_BATCH_FLUSH();
+
     opengl_clear_error();
 
     if (!opengl_shader_objects_enabled) {
@@ -807,6 +843,11 @@ void sys_(graphics_draw_primitive)(SysPrimitive *primitive,
 
 void sys_(graphics_destroy_primitive)(SysPrimitive *primitive)
 {
+    if (primitive->is_batched) {
+        mem_free(primitive);  // Data belongs to the caller.
+        return;
+    }
+
     if (primitive->generation == opengl_device_generation) {
         if (primitive->vertex_buffer) {
             if (current_vertex_buffer == primitive->vertex_buffer) {
