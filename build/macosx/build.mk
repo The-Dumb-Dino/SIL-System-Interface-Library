@@ -250,7 +250,8 @@ CC_LD = $(if $(filter 1,$(SIL_LINK_CXX_STL)),$(CXX),$(CC))
 
 # Other definitions used only in this file.
 
-SYSTEM_FRAMEWORKS = AudioUnit Cocoa CoreAudio ForceFeedback IOKit OpenGL \
+SYSTEM_FRAMEWORKS = AudioUnit Cocoa CoreAudio ForceFeedback IOKit \
+                    $(if $(filter 1,$(SIL_USE_SDLGPU)),Metal,OpenGL) \
                     QuartzCore \
                     $(if $(filter 10.7%,$(TARGET_OS_VERSION)),ApplicationServices,CoreGraphics)
 LOCAL_FRAMEWORKS =
@@ -262,22 +263,43 @@ ALL_FRAMEWORKS = $(SYSTEM_FRAMEWORKS) $(LOCAL_FRAMEWORKS)
 
 SIL_SYS_CONFIG_HEADER = macosx.h
 
-SIL_SYS_SOURCES = $(SIL_OPENGL_SOURCES) \
+# $(SIL_USE_SDLGPU):  Set to 1 to use the SDL3 platform layer and the
+# SDL_GPU rendering backend (Metal) instead of Cocoa + OpenGL.  Requires
+# SDL3 (found with pkg-config, or set SDL3_CFLAGS / SDL3_LIBS).
+SIL_USE_SDLGPU ?= 0
+ifeq ($(SIL_USE_SDLGPU),1)
+SDL3_CFLAGS ?= $(shell pkg-config --cflags sdl3)
+SDL3_LIBS ?= $(shell pkg-config --libs sdl3)
+endif
+
+_SIL_GRAPHICS_SOURCES = $(if $(filter 1,$(SIL_USE_SDLGPU)), \
+                  sysdep/sdl/graphics.c \
+                  sysdep/sdl/input.c \
+                  sysdep/sdl/main.c \
+                  sysdep/sdlgpu/base.c \
+                  sysdep/sdlgpu/primitive.c \
+                  sysdep/sdlgpu/shader.c \
+                  sysdep/sdlgpu/texture.c \
+              , \
+                  $(SIL_OPENGL_SOURCES) \
+                  sysdep/macosx/graphics.m \
+                  sysdep/macosx/input.m \
+                  sysdep/macosx/main.m \
+                  sysdep/macosx/thread.m \
+                  sysdep/macosx/view.m \
+                  sysdep/macosx/window.m \
+              )
+
+SIL_SYS_SOURCES = $(_SIL_GRAPHICS_SOURCES) \
                   sysdep/darwin/debug.c \
                   sysdep/darwin/meminfo.c \
                   sysdep/darwin/semaphore.c \
                   sysdep/darwin/time.c \
                   sysdep/macosx/dialog.m \
-                  sysdep/macosx/graphics.m \
-                  sysdep/macosx/input.m \
-                  sysdep/macosx/main.m \
                   sysdep/macosx/misc.c \
                   sysdep/macosx/sound.c \
-                  sysdep/macosx/thread.m \
                   sysdep/macosx/userdata.c \
                   sysdep/macosx/util.m \
-                  sysdep/macosx/view.m \
-                  sysdep/macosx/window.m \
                   sysdep/misc/ioqueue.c \
                   sysdep/misc/joystick-db.c \
                   sysdep/misc/joystick-hid.c \
@@ -310,7 +332,8 @@ SIL_SYS_SOURCES = $(SIL_OPENGL_SOURCES) \
                   )
 
 SIL_SYS_FLAGS = $(CFLAG_DEFINE)_POSIX_C_SOURCE=200809L \
-                $(CFLAG_DEFINE)_DARWIN_C_SOURCE
+                $(CFLAG_DEFINE)_DARWIN_C_SOURCE \
+                $(if $(filter 1,$(SIL_USE_SDLGPU)),$(CFLAG_DEFINE)SIL_USE_SDLGPU $(SDL3_CFLAGS))
 
 include $(_THISDIR)/../common/sources.mk
 
@@ -401,7 +424,7 @@ $(EXECUTABLE_NAME): $(sort $(ALL_OBJECTS))
 	    $(BASE_LDFLAGS) $(ALL_LDFLAGS) $(LDFLAGS) \
 	    $(ALL_OBJECTS) \
 	    $(foreach i,$(ALL_FRAMEWORKS),-framework $i) \
-            $(BASE_LIBS) $(ALL_LIBS) $(LIBS) \
+            $(BASE_LIBS) $(ALL_LIBS) $(LIBS) $(SDL3_LIBS) \
 	    $(CFLAG_LINK_OUTPUT)'$@'
 
 #-------------------------------------------------------------------------#
