@@ -174,7 +174,7 @@ $(warning --- Rerun make with "SDK_ROOT=/path/to/MacOSX.sdk".)
 $(error Mac OS X SDK not found)
 endif
 
-ifneq ($(or $(filter 1 2 3 4 5 6 7 8 9,$(firstword $(subst ., ,$(SDK_VERSION)))),$(filter 0 1 2 3 4 5 6,$(word 2,$(subst ., ,$(SDK_VERSION))))),)
+ifneq ($(or $(filter 1 2 3 4 5 6 7 8 9,$(firstword $(subst ., ,$(SDK_VERSION)))),$(and $(filter 10,$(firstword $(subst ., ,$(SDK_VERSION)))),$(filter 0 1 2 3 4 5 6,$(word 2,$(subst ., ,$(SDK_VERSION)))))),)
 $(warning --- Mac OS X SDK (version $(SDK_VERSION)) is too old!)
 $(warning --- Version 10.7 or later of the SDK is required.)
 $(error Mac OS X SDK too old)
@@ -183,7 +183,11 @@ endif
 endif
 
 # Target OS version (if not already defined).
-TARGET_OS_VERSION ?= 10.7.3
+# Target CPU architecture (x86_64 or arm64).
+ARCH ?= x86_64
+
+# Modern SDKs (libc++) require a deployment target of at least 11.0.
+TARGET_OS_VERSION ?= 11.0
 
 #-------------------------------------------------------------------------#
 
@@ -209,17 +213,21 @@ XCODE_ROOT := $(XCODE_ROOT)
 CC = $(TOOLCHAIN_ROOT)/usr/bin/clang
 
 # Default flags used by Xcode (excluding those we already set in toolchain.mk).
-PLATFORM_FLAGS = -arch x86_64 \
+PLATFORM_FLAGS = -arch $(ARCH) \
                  -gdwarf-2 \
                  -isysroot $(SDK_ROOT)
 PLATFORM_CFLAGS = $(PLATFORM_FLAGS) \
                   -ffast-math \
                   -fmessage-length=0 \
+                  -DGL_SILENCE_DEPRECATION \
+                  -Wno-deprecated-declarations \
+                  -Wno-nan-infinity-disabled \
                   -fvisibility=hidden \
                   -mmacosx-version-min=$(TARGET_OS_VERSION)
 PLATFORM_CXXFLAGS = $(PLATFORM_CFLAGS) \
                     -stdlib=$(STL_LIBRARY) \
-                    -fvisibility-inlines-hidden
+                    -fvisibility-inlines-hidden \
+                    -Wno-nontrivial-memcall
 PLATFORM_LDFLAGS = $(PLATFORM_FLAGS) \
                    -stdlib=$(STL_LIBRARY)
 

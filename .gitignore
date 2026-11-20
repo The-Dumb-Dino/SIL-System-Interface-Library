@@ -1,0 +1,4 @@
+obj/
+/sample/build/sample
+/sample/build/sample.app/
+*.o
