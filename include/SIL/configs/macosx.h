@@ -19,6 +19,10 @@
 #if defined(__x86_64__)
 # define SIL_ARCH_X86
 # define SIL_ARCH_X86_64
+#elif defined(__aarch64__)
+# define SIL_ARCH_ARM
+# define SIL_ARCH_ARM_64
+# define SIL_ARCH_ARM_NEON
 #else
 # error Unsupported CPU architecture!
 #endif
