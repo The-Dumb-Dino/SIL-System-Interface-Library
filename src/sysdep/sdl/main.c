@@ -34,7 +34,7 @@
 /****************************** Local data *******************************/
 /*************************************************************************/
 
-/* Resource directory path (returned by macosx_resource_dir()). */
+/* Resource directory path. */
 static char *resource_dir;
 
 /*************************************************************************/
@@ -69,17 +69,6 @@ void sdl_run_on_main_thread(void (*function)(void *), void *userdata)
 
 /*-----------------------------------------------------------------------*/
 
-/* Hooks called by the POSIX thread implementation (src/sysdep/posix/
- * thread.c); the Cocoa layer uses these to manage per-thread OpenGL
- * contexts, which we don't need. */
-struct SysThread;
-void posix_thread_runner_init(struct SysThread *thread);
-void posix_thread_runner_cleanup(struct SysThread *thread);
-void posix_thread_runner_init(UNUSED struct SysThread *thread) {}
-void posix_thread_runner_cleanup(UNUSED struct SysThread *thread) {}
-
-/*-----------------------------------------------------------------------*/
-
 #ifdef SIL_PLATFORM_MACOSX
 
 /* The Cocoa misc.c and userdata code expect these. */
@@ -89,7 +78,31 @@ const char *macosx_resource_dir(void)
     return resource_dir ? resource_dir : ".";
 }
 
-#endif
+/* Hooks called by the POSIX thread implementation (src/sysdep/posix/
+ * thread.c); the Cocoa layer uses these to manage per-thread OpenGL
+ * contexts, which we don't need. */
+struct SysThread;
+void posix_thread_runner_init(struct SysThread *thread);
+void posix_thread_runner_cleanup(struct SysThread *thread);
+void posix_thread_runner_init(UNUSED struct SysThread *thread) {}
+void posix_thread_runner_cleanup(UNUSED struct SysThread *thread) {}
+
+#endif  // SIL_PLATFORM_MACOSX
+
+/*-----------------------------------------------------------------------*/
+
+#ifdef SIL_PLATFORM_WINDOWS
+
+/* The Windows sysdep files (src/sysdep/windows/{files,misc,userdata}.c)
+ * expect these from main.c, which the SDL layer replaces.  The path is
+ * returned in Windows format (backslash separators). */
+const char *windows_executable_dir(void);
+const char *windows_executable_dir(void)
+{
+    return resource_dir ? resource_dir : ".";
+}
+
+#endif  // SIL_PLATFORM_WINDOWS
 
 /*************************************************************************/
 /***************************** Entry point *******************************/
@@ -101,8 +114,10 @@ int main(int argc, char **argv_)
 
     signal(SIGINT,  term_signal_handler);
     signal(SIGTERM, term_signal_handler);
+#ifndef SIL_PLATFORM_WINDOWS  // Not supported by the Windows runtime.
     signal(SIGHUP,  term_signal_handler);
     signal(SIGPIPE, SIG_IGN);
+#endif
 
     fpu_configure();
 
@@ -111,10 +126,12 @@ int main(int argc, char **argv_)
         argc = 1;
         argv = argv_dummy;
     }
+#ifdef __APPLE__
     /* Strip the Finder's process serial number argument, if any. */
     if (argc > 1 && strncmp(argv[1], "-psn", 4) == 0) {
         argc = 1;
     }
+#endif
 
     SDL_SetHint(SDL_HINT_APP_NAME, "SIL");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD)) {
@@ -123,7 +140,9 @@ int main(int argc, char **argv_)
     }
 
     /* Resources live in the app bundle's Resources directory if we're
-     * running from a bundle, else next to the executable. */
+     * running from a bundle, else next to the executable.  (On Windows we
+     * strip the trailing separator from the base path so that the result
+     * can be used directly as a directory name.) */
     const char *base = SDL_GetBasePath();
     if (base) {
         const char *contents = strstr(base, ".app/Contents/");
@@ -137,9 +156,15 @@ int main(int argc, char **argv_)
         } else {
             resource_dir = strdup(base);
             if (resource_dir) {
-                const size_t len = strlen(resource_dir);
-                if (len > 1 && resource_dir[len-1] == '/') {
-                    resource_dir[len-1] = 0;
+                size_t len = strlen(resource_dir);
+                while (len > 1 && (resource_dir[len-1] == '/'
+                                || resource_dir[len-1] == '\\')) {
+                    /* Don't strip the separator from a drive root ("C:\")
+                     * or a UNC share root. */
+                    if (len == 3 && resource_dir[1] == ':') {
+                        break;
+                    }
+                    resource_dir[--len] = 0;
                 }
             }
         }

@@ -38,6 +38,13 @@ extern int sdlgpu_create_device(void);
 extern int sdlgpu_driver_is_vulkan(void);
 
 /**
+ * sdlgpu_driver_name:  Return the name of the driver in use ("metal",
+ * "vulkan", "direct3d12", ...), or NULL if no device has been created.
+ * Direct3D 12 needs no special window flag, unlike Metal and Vulkan.
+ */
+extern const char *sdlgpu_driver_name(void);
+
+/**
  * sdlgpu_init:  Attach the SDL_GPU device (see sdlgpu_create_device())
  * to the given window and initialize the rendering state.
  *

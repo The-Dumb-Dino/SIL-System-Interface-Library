@@ -118,11 +118,13 @@ static void do_create_window(void *userdata)
                            attr_resizable);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
                            !attr_window);
-    /* The window type must match the GPU driver. */
-    if (sdlgpu_driver_is_vulkan()) {
+    /* The window type must match the GPU driver (Direct3D 12 needs no
+     * special window type). */
+    const char *driver = sdlgpu_driver_name();
+    if (driver && strcmp(driver, "vulkan") == 0) {
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN,
                                true);
-    } else {
+    } else if (driver && strcmp(driver, "metal") == 0) {
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_METAL_BOOLEAN,
                                true);
     }
@@ -557,6 +559,32 @@ void sdl_graphics_window_size(int *width_ret, int *height_ret)
         *height_ret = 0;
     }
 }
+
+/*************************************************************************/
+/********* Compatibility with the Windows sysdep layer (misc.c) **********/
+/*************************************************************************/
+
+#ifdef SIL_PLATFORM_WINDOWS
+
+/* These are normally provided by src/sysdep/windows/graphics.c, which the
+ * SDL layer replaces. */
+
+const char *windows_window_title(void);
+const char *windows_window_title(void)
+{
+    return window_title;
+}
+
+void windows_show_mouse_pointer(int override);
+void windows_show_mouse_pointer(int override)
+{
+    if (override >= 0) {
+        show_pointer = (override != 0);
+    }
+    sdl_run_on_main_thread(do_update_cursor, NULL);
+}
+
+#endif  // SIL_PLATFORM_WINDOWS
 
 /*************************************************************************/
 /*************************************************************************/

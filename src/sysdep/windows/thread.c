@@ -395,6 +395,7 @@ static DWORD CALLBACK thread_runner(LPVOID param)
 
 static void cleanup_thread(void)
 {
+#ifndef SIL_USE_SDLGPU  // The SDL_GPU build has no OpenGL contexts.
     /* Destroy the GL context if one exists and it's not the main
      * rendering context for the window (which should never be the case
      * in a subthread, but it can't hurt to play it safe). */
@@ -403,6 +404,7 @@ static void cleanup_thread(void)
         wglMakeCurrent(NULL, NULL);
         wglDeleteContext(gl_context);
     }
+#endif
 }
 
 /*************************************************************************/

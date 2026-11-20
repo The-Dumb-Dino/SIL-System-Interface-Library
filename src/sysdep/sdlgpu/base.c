@@ -35,6 +35,13 @@ static uint8_t vsync_enabled;
 
 /* Offscreen display render target (see internal.h). */
 static SDL_GPUTexture *display_color, *display_depth;
+
+/* Resources for presenting the display texture by drawing it to the
+ * swapchain (see present_with_draw()). */
+static SDL_GPUGraphicsPipeline *present_pipeline;
+static SDL_GPUTextureFormat present_format = SDL_GPU_TEXTUREFORMAT_INVALID;
+static SDL_GPUSampler *present_sampler;
+static SDL_GPUBuffer *present_vbuf;
 static SDL_GPUTextureFormat display_depth_format =
     SDL_GPU_TEXTUREFORMAT_INVALID;
 static int display_width, display_height;
@@ -153,6 +160,7 @@ static void target_textures(SDL_GPUTexture **color_ret,
 static Command *new_command(void);
 static int stream_append(const void *data, uint32_t size, uint32_t *offset_ret);
 static SDL_GPUGraphicsPipeline *get_pipeline(const PipelineKey *key);
+static void release_present_resources(void);
 static void clear_pipeline_cache(void);
 static void fill_state_key(PipelineKey *key);
 static void fill_common_draw_state(Command *cmd);
@@ -177,10 +185,29 @@ int sdlgpu_create_device(void)
 #else
         0;
 #endif
-    sdlgpu_device = SDL_CreateGPUDevice(
-        SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_METALLIB
-            | SDL_GPU_SHADERFORMAT_SPIRV,
-        debug, NULL);
+    const SDL_PropertiesID props = SDL_CreateProperties();
+    SDL_SetBooleanProperty(props, SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOLEAN,
+                           debug);
+    SDL_SetBooleanProperty(props,
+                           SDL_PROP_GPU_DEVICE_CREATE_SHADERS_MSL_BOOLEAN,
+                           true);
+    SDL_SetBooleanProperty(props,
+                           SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN,
+                           true);
+    SDL_SetBooleanProperty(props,
+                           SDL_PROP_GPU_DEVICE_CREATE_SHADERS_DXIL_BOOLEAN,
+                           true);
+    SDL_SetBooleanProperty(props,
+                           SDL_PROP_GPU_DEVICE_CREATE_SHADERS_DXBC_BOOLEAN,
+                           true);
+    /* We use no storage buffers or textures, so D3D12 Resource Binding
+     * Tier 1 is sufficient (some GPUs and virtual machine drivers, such
+     * as Parallels, lack Tier 2, which SDL requires by default). */
+    SDL_SetBooleanProperty(
+        props, SDL_PROP_GPU_DEVICE_CREATE_D3D12_ALLOW_FEWER_RESOURCE_SLOTS_BOOLEAN,
+        true);
+    sdlgpu_device = SDL_CreateGPUDeviceWithProperties(props);
+    SDL_DestroyProperties(props);
     if (!sdlgpu_device) {
         DLOG("SDL_CreateGPUDevice() failed: %s", SDL_GetError());
         return 0;
@@ -196,6 +223,13 @@ int sdlgpu_driver_is_vulkan(void)
 {
     return sdlgpu_device
         && strcmp(SDL_GetGPUDeviceDriver(sdlgpu_device), "vulkan") == 0;
+}
+
+/*-----------------------------------------------------------------------*/
+
+const char *sdlgpu_driver_name(void)
+{
+    return sdlgpu_device ? SDL_GetGPUDeviceDriver(sdlgpu_device) : NULL;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -255,6 +289,7 @@ void sdlgpu_cleanup(void)
     mem_free(pipelines);
     pipelines = NULL;
     pipeline_table_size = 0;
+    release_present_resources();
     destroy_display_target();
     sdlgpu_primitive_cleanup();
     sdlgpu_texture_cleanup();
@@ -335,6 +370,187 @@ void sdlgpu_start_frame(int width, int height)
 
 /*-----------------------------------------------------------------------*/
 
+/**
+ * release_present_resources:  Release the resources used by
+ * present_with_draw(), if any.
+ */
+static void release_present_resources(void)
+{
+    if (present_pipeline) {
+        SDL_ReleaseGPUGraphicsPipeline(sdlgpu_device, present_pipeline);
+        present_pipeline = NULL;
+    }
+    present_format = SDL_GPU_TEXTUREFORMAT_INVALID;
+    if (present_sampler) {
+        SDL_ReleaseGPUSampler(sdlgpu_device, present_sampler);
+        present_sampler = NULL;
+    }
+    if (present_vbuf) {
+        SDL_ReleaseGPUBuffer(sdlgpu_device, present_vbuf);
+        present_vbuf = NULL;
+    }
+}
+
+/*-----------------------------------------------------------------------*/
+
+/**
+ * present_with_draw:  Copy the display texture to the swapchain texture,
+ * flipping it vertically, by drawing a textured full-screen quad with the
+ * default shaders.  This is equivalent to SDL_BlitGPUTexture() with
+ * SDL_FLIP_VERTICAL and nearest filtering, but does not depend on SDL's
+ * internal blit shaders, which the Direct3D 12 driver only has in DXIL
+ * form: on GPUs without Shader Model 6.0 (where we use DXBC shaders) SDL
+ * cannot create its blit pipeline and SDL_BlitGPUTexture() crashes.
+ *
+ * [Parameters]
+ *     cmdbuf: Command buffer (no pass may be active).
+ *     swapchain: Swapchain texture.
+ * [Return value]
+ *     True on success, false on error.
+ */
+static int present_with_draw(SDL_GPUCommandBuffer *cmdbuf,
+                             SDL_GPUTexture *swapchain)
+{
+    /* Vertices: position (x,y) and texture coordinates (u,v) for a
+     * triangle strip.  The vertex shader negates Y, so input Y=-1 ends up
+     * at the top of the window; that's where the last row of the display
+     * texture (the top of the image in OpenGL row order) belongs. */
+    static const float vertices[4][4] = {
+        {-1, -1, 0, 1}, {1, -1, 1, 1}, {-1, 1, 0, 0}, {1, 1, 1, 0},
+    };
+
+    if (!present_vbuf) {
+        SDL_GPUBufferCreateInfo buf_info;
+        mem_clear(&buf_info, sizeof(buf_info));
+        buf_info.usage = SDL_GPU_BUFFERUSAGE_VERTEX;
+        buf_info.size = sizeof(vertices);
+        present_vbuf = SDL_CreateGPUBuffer(sdlgpu_device, &buf_info);
+        SDL_GPUTransferBufferCreateInfo xfer_info;
+        mem_clear(&xfer_info, sizeof(xfer_info));
+        xfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        xfer_info.size = sizeof(vertices);
+        SDL_GPUTransferBuffer *xfer =
+            SDL_CreateGPUTransferBuffer(sdlgpu_device, &xfer_info);
+        void *ptr = xfer ? SDL_MapGPUTransferBuffer(sdlgpu_device, xfer, false)
+                         : NULL;
+        if (!present_vbuf || !ptr) {
+            DLOG("Failed to create present vertex buffer: %s",
+                 SDL_GetError());
+            if (xfer) {
+                SDL_ReleaseGPUTransferBuffer(sdlgpu_device, xfer);
+            }
+            release_present_resources();
+            return 0;
+        }
+        memcpy(ptr, vertices, sizeof(vertices));
+        SDL_UnmapGPUTransferBuffer(sdlgpu_device, xfer);
+        SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmdbuf);
+        const SDL_GPUTransferBufferLocation src = {.transfer_buffer = xfer};
+        const SDL_GPUBufferRegion dest = {.buffer = present_vbuf,
+                                          .size = sizeof(vertices)};
+        SDL_UploadToGPUBuffer(copy, &src, &dest, false);
+        SDL_EndGPUCopyPass(copy);
+        /* SDL keeps the transfer buffer alive until the upload is done. */
+        SDL_ReleaseGPUTransferBuffer(sdlgpu_device, xfer);
+    }
+
+    if (!present_sampler) {
+        SDL_GPUSamplerCreateInfo info;
+        mem_clear(&info, sizeof(info));
+        info.min_filter = SDL_GPU_FILTER_NEAREST;
+        info.mag_filter = SDL_GPU_FILTER_NEAREST;
+        info.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+        info.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        info.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        info.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        present_sampler = SDL_CreateGPUSampler(sdlgpu_device, &info);
+        if (!present_sampler) {
+            DLOG("SDL_CreateGPUSampler() failed: %s", SDL_GetError());
+            return 0;
+        }
+    }
+
+    const SDL_GPUTextureFormat format =
+        SDL_GetGPUSwapchainTextureFormat(sdlgpu_device, window);
+    if (present_pipeline && present_format != format) {
+        SDL_ReleaseGPUGraphicsPipeline(sdlgpu_device, present_pipeline);
+        present_pipeline = NULL;
+    }
+    if (!present_pipeline) {
+        SDL_GPUVertexAttribute attributes[2];
+        mem_clear(attributes, sizeof(attributes));
+        attributes[0].location = 0;
+        attributes[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
+        attributes[0].offset = 0;
+        attributes[1].location = 1;
+        attributes[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
+        attributes[1].offset = 2 * sizeof(float);
+        SDL_GPUVertexBufferDescription vbuf_desc;
+        mem_clear(&vbuf_desc, sizeof(vbuf_desc));
+        vbuf_desc.pitch = sizeof(vertices[0]);
+        vbuf_desc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+        SDL_GPUColorTargetDescription color_desc;
+        mem_clear(&color_desc, sizeof(color_desc));
+        color_desc.format = format;
+        SDL_GPUGraphicsPipelineCreateInfo info;
+        mem_clear(&info, sizeof(info));
+        info.vertex_shader = sdlgpu_vertex_shader(1, 0);
+        info.fragment_shader = sdlgpu_fragment_shader();
+        info.vertex_input_state.vertex_buffer_descriptions = &vbuf_desc;
+        info.vertex_input_state.num_vertex_buffers = 1;
+        info.vertex_input_state.vertex_attributes = attributes;
+        info.vertex_input_state.num_vertex_attributes = 2;
+        info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLESTRIP;
+        info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+        info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+        info.rasterizer_state.enable_depth_clip = true;
+        info.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        info.target_info.color_target_descriptions = &color_desc;
+        info.target_info.num_color_targets = 1;
+        present_pipeline = SDL_CreateGPUGraphicsPipeline(sdlgpu_device, &info);
+        if (!present_pipeline) {
+            DLOG("SDL_CreateGPUGraphicsPipeline() failed for present: %s",
+                 SDL_GetError());
+            return 0;
+        }
+        present_format = format;
+    }
+
+    SDL_GPUColorTargetInfo target;
+    mem_clear(&target, sizeof(target));
+    target.texture = swapchain;
+    target.load_op = SDL_GPU_LOADOP_DONT_CARE;
+    target.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmdbuf, &target, 1, NULL);
+    if (!pass) {
+        DLOG("SDL_BeginGPURenderPass() failed for present: %s",
+             SDL_GetError());
+        return 0;
+    }
+    SDL_BindGPUGraphicsPipeline(pass, present_pipeline);
+    const SDL_GPUBufferBinding vbuf_binding = {.buffer = present_vbuf};
+    SDL_BindGPUVertexBuffers(pass, 0, &vbuf_binding, 1);
+    const SDL_GPUTextureSamplerBinding tex_binding = {
+        .texture = display_color, .sampler = present_sampler};
+    SDL_BindGPUFragmentSamplers(pass, 0, &tex_binding, 1);
+    VSUniforms vs;
+    mem_clear(&vs, sizeof(vs));
+    vs.transform = mat4_identity;
+    vs.point_size = 1;
+    SDL_PushGPUVertexUniformData(cmdbuf, 0, &vs, sizeof(vs));
+    FSUniforms fs;
+    mem_clear(&fs, sizeof(fs));
+    fs.fixed_color.x = fs.fixed_color.y = fs.fixed_color.z = 1;
+    fs.fixed_color.w = 1;
+    fs.texmode = 1;  // RGBA
+    SDL_PushGPUFragmentUniformData(cmdbuf, 0, &fs, sizeof(fs));
+    SDL_DrawGPUPrimitives(pass, 4, 1, 0, 0);
+    SDL_EndGPURenderPass(pass);
+    return 1;
+}
+
+/*-----------------------------------------------------------------------*/
+
 void sdlgpu_finish_frame(void)
 {
     if (sdlgpu_current_framebuffer) {
@@ -358,7 +574,9 @@ void sdlgpu_finish_frame(void)
         SDL_CancelGPUCommandBuffer(cmdbuf);
         return;
     }
-    if (swapchain) {
+    if (swapchain && strcmp(sdlgpu_shader_language(), "DXBC") == 0) {
+        present_with_draw(cmdbuf, swapchain);
+    } else if (swapchain) {
         /* The display texture is stored with GL row order (row 0 at the
          * bottom), so flip it vertically while copying. */
         SDL_GPUBlitInfo blit;

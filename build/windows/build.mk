@@ -167,6 +167,13 @@ BASE_LIBS = $(if $(filter 1,$(DEBUG)),-lpsapi) \
 
 include $(_THISDIR)/../common/toolchain.mk
 
+# MSYS2's MinGW-w64 packages install the binutils tools (ar, ranlib) only
+# under their unprefixed names.
+ifeq (,$(shell command -v $(TOOLCHAIN_PREFIX)ar 2>/dev/null))
+    AR_RC := ar rc
+    RANLIB := ranlib
+endif
+
 CC_LD = $(if $(filter 1,$(SIL_LINK_CXX_STL)),$(CXX),$(CC))
 
 
@@ -180,8 +187,13 @@ ifneq ($(and $(filter gcc,$(CC_TYPE)),$(call CC_VERSION-is-not-at-least,4.8.3)),
 endif
 
 
-# Program paths used only in this file.
+# Program paths used only in this file.  MinGW-w64 toolchains installed from
+# MSYS2 have only unprefixed names for some tools (windres), so fall back to
+# the unprefixed name if the prefixed one does not exist.
 WINDRES ?= $(if $(filter $(TOOLCHAIN_PREFIX)%,$(CC)),$(TOOLCHAIN_PREFIX))windres
+ifeq (,$(shell command -v $(WINDRES) 2>/dev/null))
+    WINDRES := windres
+endif
 
 ###########################################################################
 ################# Source file lists and associated flags ##################
@@ -189,13 +201,30 @@ WINDRES ?= $(if $(filter $(TOOLCHAIN_PREFIX)%,$(CC)),$(TOOLCHAIN_PREFIX))windres
 
 SIL_SYS_CONFIG_HEADER = windows.h
 
-SIL_SYS_SOURCES = $(SIL_OPENGL_SOURCES) \
-                  sysdep/misc/ioqueue.c \
-                  sysdep/misc/joystick-db.c \
-                  sysdep/misc/joystick-hid.c \
-                  sysdep/misc/movie-none.c \
-                  sysdep/misc/sysfont-none.c \
-                  sysdep/windows/condvar.c \
+# $(SIL_USE_SDLGPU):  Set to 1 to use the SDL3 platform layer and the
+# SDL_GPU rendering backend (Direct3D 12 by default, Vulkan with
+# SDL_GPU_DRIVER=vulkan) instead of the Win32 window/input code and the
+# OpenGL / Direct3D 11 backends.  Requires SDL3 (found with pkg-config if
+# available, else -lSDL3 from the toolchain's default paths; or set
+# SDL3_CFLAGS / SDL3_LIBS).  SDL3.dll must be next to the executable or in
+# the PATH at runtime.
+SIL_USE_SDLGPU ?= 0
+ifeq ($(SIL_USE_SDLGPU),1)
+_SDL3_PKGCONFIG := $(shell pkg-config --exists sdl3 2>/dev/null && echo 1)
+SDL3_CFLAGS ?= $(if $(_SDL3_PKGCONFIG),$(shell pkg-config --cflags sdl3))
+SDL3_LIBS ?= $(if $(_SDL3_PKGCONFIG),$(shell pkg-config --libs sdl3),-lSDL3)
+endif
+
+_SIL_GRAPHICS_SOURCES = $(if $(filter 1,$(SIL_USE_SDLGPU)), \
+                  sysdep/sdl/graphics.c \
+                  sysdep/sdl/input.c \
+                  sysdep/sdl/main.c \
+                  sysdep/sdlgpu/base.c \
+                  sysdep/sdlgpu/primitive.c \
+                  sysdep/sdlgpu/shader.c \
+                  sysdep/sdlgpu/texture.c \
+              , \
+                  $(SIL_OPENGL_SOURCES) \
                   sysdep/windows/d3d-base.c \
                   sysdep/windows/d3d-framebuffer.c \
                   sysdep/windows/d3d-inputlayout.c \
@@ -203,12 +232,21 @@ SIL_SYS_SOURCES = $(SIL_OPENGL_SOURCES) \
                   sysdep/windows/d3d-shader.c \
                   sysdep/windows/d3d-state.c \
                   sysdep/windows/d3d-texture.c \
-                  sysdep/windows/debug.c \
-                  sysdep/windows/files.c \
                   sysdep/windows/graphics.c \
                   sysdep/windows/input.c \
-                  sysdep/windows/log.c \
                   sysdep/windows/main.c \
+              )
+
+SIL_SYS_SOURCES = $(_SIL_GRAPHICS_SOURCES) \
+                  sysdep/misc/ioqueue.c \
+                  sysdep/misc/joystick-db.c \
+                  sysdep/misc/joystick-hid.c \
+                  sysdep/misc/movie-none.c \
+                  sysdep/misc/sysfont-none.c \
+                  sysdep/windows/condvar.c \
+                  sysdep/windows/debug.c \
+                  sysdep/windows/files.c \
+                  sysdep/windows/log.c \
                   sysdep/windows/misc.c \
                   sysdep/windows/mutex.c \
                   sysdep/windows/semaphore.c \
@@ -239,7 +277,8 @@ SIL_SYS_SOURCES = $(SIL_OPENGL_SOURCES) \
                   )
 
 SIL_SYS_FLAGS += $(if $(ICON_FILE),$(CFLAG_DEFINE)HAVE_DEFAULT_ICON) \
-                 $(if $(filter 1,$(USE_PRECOMPILED_D3D_SHADERS)),$(CFLAG_DEFINE)SIL_PLATFORM_WINDOWS_PRECOMPILED_D3D_SHADERS)
+                 $(if $(filter 1,$(USE_PRECOMPILED_D3D_SHADERS)),$(CFLAG_DEFINE)SIL_PLATFORM_WINDOWS_PRECOMPILED_D3D_SHADERS) \
+                 $(if $(filter 1,$(SIL_USE_SDLGPU)),$(CFLAG_DEFINE)SIL_USE_SDLGPU $(SDL3_CFLAGS))
 
 include $(_THISDIR)/../common/sources.mk
 
@@ -301,7 +340,7 @@ $(EXECUTABLE_NAME).exe: $(sort $(ALL_OBJECTS))
 	$(Q)$(CC_LD) \
 	    $(BASE_LDFLAGS) $(ALL_LDFLAGS) $(LDFLAGS) \
 	    $(ALL_OBJECTS) \
-	    $(ALL_LIBS) $(BASE_LIBS) $(LIBS) \
+	    $(ALL_LIBS) $(BASE_LIBS) $(LIBS) $(SDL3_LIBS) \
 	    $(CFLAG_LINK_OUTPUT)'$@'
 endif
 

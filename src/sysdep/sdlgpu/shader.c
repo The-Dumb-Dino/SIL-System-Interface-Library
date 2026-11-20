@@ -13,13 +13,15 @@
  * controlled by uniforms.  Custom shaders (shader.h, shader generators)
  * are not supported by this backend.
  *
- * Two shader languages are provided, chosen by what the GPU driver
- * accepts (SDL_GetGPUShaderFormats()):
+ * The shader format is chosen by what the GPU driver accepts
+ * (SDL_GetGPUShaderFormats()):
  *   - MSL source (Metal), compiled by SDL at runtime;
  *   - SPIR-V (Vulkan), compiled offline from shaders/default.{vert,frag}
- *     by shaders/build-shaders.sh into shaders-spirv.i.
- * Direct3D 12 would additionally need DXIL/DXBC; on Windows SIL already has
- * its own Direct3D 11 backend.
+ *     by shaders/build-shaders.sh into shaders-spirv.i;
+ *   - DXIL (Direct3D 12, Shader Model 6.0) and DXBC (Direct3D 12, Shader
+ *     Model 5.1, for GPUs without SM 6.0), compiled offline from
+ *     shaders/default.hlsl by shaders/build-shaders.sh into
+ *     shaders-dxil.i and shaders-dxbc.i.
  */
 
 #define IN_SYSDEP
@@ -143,6 +145,8 @@ static const char msl_fragment[] =
     "}\n";
 
 #include "src/sysdep/sdlgpu/shaders-spirv.i"
+#include "src/sysdep/sdlgpu/shaders-dxil.i"
+#include "src/sysdep/sdlgpu/shaders-dxbc.i"
 
 /*************************************************************************/
 /****************************** Local data *******************************/
@@ -195,21 +199,49 @@ static SDL_GPUShader *create_msl_shader(SDL_GPUShaderStage stage,
 
 /*-----------------------------------------------------------------------*/
 
-static SDL_GPUShader *create_spirv_shader(SDL_GPUShaderStage stage,
-                                          const uint8_t *code, size_t size)
+/* Precompiled shader sets, in order of preference.  DXIL is preferred
+ * over DXBC because the Direct3D 12 driver accepts DXIL only if the GPU
+ * supports Shader Model 6.0; DXBC (Shader Model 5.1) is the fallback for
+ * older GPUs and virtual machine drivers. */
+typedef struct BinaryShader {const uint8_t *code; size_t size;} BinaryShader;
+typedef struct BinaryShaderSet {
+    SDL_GPUShaderFormat format;
+    const char *name;
+    BinaryShader vertex[2][2];  // [has_tex][has_color]
+    BinaryShader fragment;
+} BinaryShaderSet;
+#define BINARY_SHADER_SET(format, name, prefix) \
+    {format, name, \
+     {{{prefix##_vertex_t0_c0, sizeof(prefix##_vertex_t0_c0)}, \
+       {prefix##_vertex_t0_c1, sizeof(prefix##_vertex_t0_c1)}}, \
+      {{prefix##_vertex_t1_c0, sizeof(prefix##_vertex_t1_c0)}, \
+       {prefix##_vertex_t1_c1, sizeof(prefix##_vertex_t1_c1)}}}, \
+     {prefix##_fragment, sizeof(prefix##_fragment)}}
+static const BinaryShaderSet binary_shader_sets[] = {
+    BINARY_SHADER_SET(SDL_GPU_SHADERFORMAT_DXIL, "DXIL", dxil),
+    BINARY_SHADER_SET(SDL_GPU_SHADERFORMAT_DXBC, "DXBC", dxbc),
+    BINARY_SHADER_SET(SDL_GPU_SHADERFORMAT_SPIRV, "SPIR-V", spirv),
+};
+#undef BINARY_SHADER_SET
+
+/*-----------------------------------------------------------------------*/
+
+static SDL_GPUShader *create_binary_shader(const BinaryShaderSet *set,
+                                           SDL_GPUShaderStage stage,
+                                           const BinaryShader *code)
 {
     SDL_GPUShaderCreateInfo info;
     mem_clear(&info, sizeof(info));
-    info.code = code;
-    info.code_size = size;
+    info.code = code->code;
+    info.code_size = code->size;
     info.entrypoint = "main";
-    info.format = SDL_GPU_SHADERFORMAT_SPIRV;
+    info.format = set->format;
     info.stage = stage;
     info.num_uniform_buffers = 1;
     info.num_samplers = (stage == SDL_GPU_SHADERSTAGE_FRAGMENT) ? 1 : 0;
     SDL_GPUShader *shader = SDL_CreateGPUShader(sdlgpu_device, &info);
     if (!shader) {
-        DLOG("Failed to create SPIR-V %s shader: %s",
+        DLOG("Failed to create %s %s shader: %s", set->name,
              stage == SDL_GPU_SHADERSTAGE_VERTEX ? "vertex" : "fragment",
              SDL_GetError());
     }
@@ -220,30 +252,49 @@ static SDL_GPUShader *create_spirv_shader(SDL_GPUShaderStage stage,
 
 int sdlgpu_shader_init(void)
 {
-    const SDL_GPUShaderFormat formats = SDL_GetGPUShaderFormats(sdlgpu_device);
+    SDL_GPUShaderFormat formats = SDL_GetGPUShaderFormats(sdlgpu_device);
 
-    if (formats & SDL_GPU_SHADERFORMAT_SPIRV) {
-        static const struct {const uint8_t *code; size_t size;} vs[2][2] = {
-            {{spirv_vertex_t0_c0, sizeof(spirv_vertex_t0_c0)},
-             {spirv_vertex_t0_c1, sizeof(spirv_vertex_t0_c1)}},
-            {{spirv_vertex_t1_c0, sizeof(spirv_vertex_t1_c0)},
-             {spirv_vertex_t1_c1, sizeof(spirv_vertex_t1_c1)}},
-        };
-        shader_language = "SPIR-V";
+#ifdef DEBUG
+    /* For testing, the SIL_SDLGPU_SHADER_FORMAT hint (or environment
+     * variable) can select one shader format ("DXIL", "DXBC", "SPIR-V" or
+     * "MSL"), e.g. to test the DXBC shaders on a GPU which also supports
+     * DXIL. */
+    const char *forced_format = SDL_GetHint("SIL_SDLGPU_SHADER_FORMAT");
+    if (forced_format && *forced_format) {
+        SDL_GPUShaderFormat mask = 0;
+        if (SDL_strcasecmp(forced_format, "MSL") == 0) {
+            mask = SDL_GPU_SHADERFORMAT_MSL;
+        }
+        for (int i = 0; i < lenof(binary_shader_sets); i++) {
+            if (SDL_strcasecmp(forced_format,
+                               binary_shader_sets[i].name) == 0) {
+                mask = binary_shader_sets[i].format;
+            }
+        }
+        DLOG("Restricting shader format to %s (driver accepts 0x%X)",
+             forced_format, formats);
+        formats &= mask;
+    }
+#endif
+
+    for (int i = 0; i < lenof(binary_shader_sets); i++) {
+        const BinaryShaderSet *set = &binary_shader_sets[i];
+        if (!(formats & set->format)) {
+            continue;
+        }
+        shader_language = set->name;
         for (int tex = 0; tex < 2; tex++) {
             for (int color = 0; color < 2; color++) {
-                vertex_shaders[tex][color] = create_spirv_shader(
-                    SDL_GPU_SHADERSTAGE_VERTEX, vs[tex][color].code,
-                    vs[tex][color].size);
+                vertex_shaders[tex][color] = create_binary_shader(
+                    set, SDL_GPU_SHADERSTAGE_VERTEX, &set->vertex[tex][color]);
                 if (!vertex_shaders[tex][color]) {
                     sdlgpu_shader_cleanup();
                     return 0;
                 }
             }
         }
-        fragment_shader = create_spirv_shader(
-            SDL_GPU_SHADERSTAGE_FRAGMENT, spirv_fragment,
-            sizeof(spirv_fragment));
+        fragment_shader = create_binary_shader(
+            set, SDL_GPU_SHADERSTAGE_FRAGMENT, &set->fragment);
         if (!fragment_shader) {
             sdlgpu_shader_cleanup();
             return 0;
@@ -252,8 +303,8 @@ int sdlgpu_shader_init(void)
     }
 
     if (!(formats & SDL_GPU_SHADERFORMAT_MSL)) {
-        DLOG("No supported shader format (driver accepts 0x%X; MSL and"
-             " SPIR-V are implemented)", formats);
+        DLOG("No supported shader format (driver accepts 0x%X; MSL, SPIR-V,"
+             " DXIL and DXBC are implemented)", formats);
         return 0;
     }
     shader_language = "MSL";
