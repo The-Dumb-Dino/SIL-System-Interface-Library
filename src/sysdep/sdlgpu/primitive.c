@@ -256,6 +256,34 @@ SysPrimitive *sys_graphics_create_primitive(
             goto error;
         }
     }
+    /* If large points have to be drawn as quads, the vertices are
+     * transformed on the CPU at draw time, so keep a copy of the data. */
+    if (type == GRAPHICS_PRIMITIVE_POINTS && sdlgpu_emulate_point_size()) {
+        if (!local_vdata) {
+            local_vdata = mem_alloc(vdata_size, 4, 0);
+            if (!local_vdata) {
+                DLOG("No memory for point data copy");
+                goto error;
+            }
+            memcpy(local_vdata, data, vdata_size);
+        }
+        if (index_data && !local_idata) {
+            local_idata = mem_alloc(idata_size, 4, 0);
+            if (!local_idata) {
+                DLOG("No memory for point index copy");
+                goto error;
+            }
+            memcpy(local_idata, index_data, idata_size);
+        }
+        primitive->vdata = local_vdata;
+        primitive->vdata_size = vdata_size;
+        primitive->vdata_owned = 1;
+        primitive->idata = local_idata;
+        primitive->idata_size = idata_size;
+        primitive->idata_owned = (local_idata != NULL);
+        return primitive;
+    }
+
     mem_free(local_vdata);
     mem_free(local_idata);
     return primitive;

@@ -33,6 +33,14 @@ struct SysTexture *sdlgpu_current_texture;
 static SDL_Window *window;
 static uint8_t vsync_enabled;
 
+/* Nonzero if large points are drawn as quads (see draw_points_as_quads()). */
+static uint8_t emulate_point_size;
+/* Set while draw_points_as_quads() records its quads: the vertices are
+ * already in clip space, so the draw uses an identity transform, this fog
+ * transform, and no face culling. */
+static uint8_t point_quads_active;
+static Vector4f point_quads_fog_transform;
+
 /* Offscreen display render target (see internal.h). */
 static SDL_GPUTexture *display_color, *display_depth;
 
@@ -161,6 +169,8 @@ static Command *new_command(void);
 static int stream_append(const void *data, uint32_t size, uint32_t *offset_ret);
 static SDL_GPUGraphicsPipeline *get_pipeline(const PipelineKey *key);
 static void release_present_resources(void);
+static void draw_points_as_quads(const struct SysPrimitive *primitive,
+                                 int first, int count);
 static void clear_pipeline_cache(void);
 static void fill_state_key(PipelineKey *key);
 static void fill_common_draw_state(Command *cmd);
@@ -214,7 +224,17 @@ int sdlgpu_create_device(void)
     }
     DLOG("SDL_GPU device created: driver=%s",
          SDL_GetGPUDeviceDriver(sdlgpu_device));
+    /* Direct3D has no programmable point size (always 1 pixel). */
+    emulate_point_size =
+        (strcmp(SDL_GetGPUDeviceDriver(sdlgpu_device), "direct3d12") == 0);
     return 1;
+}
+
+/*-----------------------------------------------------------------------*/
+
+int sdlgpu_emulate_point_size(void)
+{
+    return emulate_point_size;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -993,9 +1013,144 @@ void sdlgpu_defer_release_texture(SDL_GPUTexture *texture)
 /******************* Internal interface: draw recording ******************/
 /*************************************************************************/
 
+/**
+ * draw_points_as_quads:  Draw (part of) a POINTS primitive with the
+ * current point size as screen-aligned quads, for drivers without a
+ * programmable point size.  Each point is transformed on the CPU and
+ * replaced by two triangles in clip space covering point_size x point_size
+ * pixels around it, which is the area OpenGL rasterizes for a point.  As
+ * in OpenGL, points whose center lies outside the clip volume are
+ * discarded, and points are never culled.
+ *
+ * [Parameters]
+ *     primitive: POINTS primitive (with CPU vertex data).
+ *     first, count: Range of vertices (or indices) to draw.
+ */
+static void draw_points_as_quads(const struct SysPrimitive *primitive,
+                                 int first, int count)
+{
+    if (!primitive->vdata || viewport_w <= 0 || viewport_h <= 0) {
+        return;
+    }
+
+    /* Clip-space transform, as in the vertex shader (row vector times
+     * matrix).  The fog value is dot(fog_transform, position); since the
+     * quads are given in clip space, use the equivalent vector for clip
+     * coordinates (inverse transform applied to fog_transform). */
+    Matrix4f modelview, transform, inverse;
+    mat4_mul(&modelview, &model_matrix, &view_matrix);
+    mat4_mul(&transform, &modelview, &projection_matrix);
+    const float fog[4] = {modelview._13, modelview._23, modelview._33,
+                          modelview._43};
+    float clip_fog[4] = {0, 0, 0, 0};
+    if (mat4_inv(&inverse, &transform) != 0) {
+        const float *m = &inverse._11;
+        for (int i = 0; i < 4; i++) {
+            clip_fog[i] = m[i*4+0]*fog[0] + m[i*4+1]*fog[1]
+                        + m[i*4+2]*fog[2] + m[i*4+3]*fog[3];
+        }
+    }
+
+    /* Output vertex layout: float4 clip position, then the texture
+     * coordinates and color copied from the source vertex. */
+    const int tex_size = primitive->has_texcoord ? 8 : 0;
+    const int color_size = primitive->color_format == VFMT_FLOAT4 ? 16
+                         : primitive->color_format ? 4 : 0;
+    const int out_stride = 16 + tex_size + color_size;
+    uint8_t *out = mem_alloc((size_t)out_stride * 6 * count, 4,
+                             MEM_ALLOC_TEMP);
+    if (!out) {
+        DLOG("No memory for %d point quads", count);
+        return;
+    }
+
+    const float *t = &transform._11;
+    const float half_w = point_size / (float)viewport_w;  // In NDC units.
+    const float half_h = point_size / (float)viewport_h;
+    const int num_pos = primitive->pos_format == VFMT_FLOAT4 ? 4
+                      : primitive->pos_format == VFMT_FLOAT3 ? 3 : 2;
+    const uint8_t *vdata = primitive->vdata;
+    int num_out = 0;
+    for (int i = first; i < first + count; i++) {
+        uint32_t index = (uint32_t)i;
+        if (primitive->idata) {
+            index = primitive->index32 ? ((const uint32_t *)primitive->idata)[i]
+                                       : ((const uint16_t *)primitive->idata)[i];
+        }
+        if (index >= (uint32_t)primitive->vertex_count) {
+            continue;
+        }
+        const uint8_t *src = vdata + (size_t)index * primitive->stride;
+        float pos[4] = {0, 0, 0, 1};
+        memcpy(pos, src + primitive->pos_offset, num_pos * sizeof(float));
+        float clip[4];
+        for (int c = 0; c < 4; c++) {
+            clip[c] = pos[0]*t[0*4+c] + pos[1]*t[1*4+c]
+                    + pos[2]*t[2*4+c] + pos[3]*t[3*4+c];
+        }
+        const float w = clip[3];
+        if (!(w > 0)
+         || clip[0] < -w || clip[0] > w
+         || clip[1] < -w || clip[1] > w
+         || clip[2] < -w || clip[2] > w) {
+            continue;
+        }
+        static const int8_t corners[6][2] = {
+            {-1,-1}, {1,-1}, {-1,1}, {-1,1}, {1,-1}, {1,1}};
+        for (int k = 0; k < 6; k++) {
+            uint8_t *dest = out + (size_t)num_out * out_stride;
+            const float vpos[4] = {clip[0] + corners[k][0] * half_w * w,
+                                   clip[1] + corners[k][1] * half_h * w,
+                                   clip[2], w};
+            memcpy(dest, vpos, sizeof(vpos));
+            if (tex_size) {
+                memcpy(dest + 16, src + primitive->tex_offset, tex_size);
+            }
+            if (color_size) {
+                memcpy(dest + 16 + tex_size, src + primitive->color_offset,
+                       color_size);
+            }
+            num_out++;
+        }
+    }
+
+    if (num_out > 0) {
+        struct SysPrimitive quads;
+        mem_clear(&quads, sizeof(quads));
+        quads.type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+        quads.immediate = 1;
+        quads.pos_format = VFMT_FLOAT4;
+        quads.pos_offset = 0;
+        quads.has_texcoord = primitive->has_texcoord;
+        quads.tex_offset = 16;
+        quads.color_format = primitive->color_format;
+        quads.color_offset = (uint16_t)(16 + tex_size);
+        quads.stride = (uint16_t)out_stride;
+        quads.vertex_count = quads.render_count = num_out;
+        quads.vdata = out;
+        quads.vdata_size = (uint32_t)out_stride * num_out;
+        point_quads_active = 1;
+        point_quads_fog_transform.x = clip_fog[0];
+        point_quads_fog_transform.y = clip_fog[1];
+        point_quads_fog_transform.z = clip_fog[2];
+        point_quads_fog_transform.w = clip_fog[3];
+        /* The vertex data is copied into the stream arena here. */
+        sdlgpu_record_draw(&quads, 0, num_out);
+        point_quads_active = 0;
+    }
+    mem_free(out);
+}
+
+/*-----------------------------------------------------------------------*/
+
 void sdlgpu_record_draw(struct SysPrimitive *primitive, int first, int count)
 {
     if (count <= 0) {
+        return;
+    }
+    if (emulate_point_size && point_size != 1
+     && primitive->type == SDL_GPU_PRIMITIVETYPE_POINTLIST) {
+        draw_points_as_quads(primitive, first, count);
         return;
     }
     SDL_GPUTexture *color_target, *depth_target;
@@ -1016,6 +1171,9 @@ void sdlgpu_record_draw(struct SysPrimitive *primitive, int first, int count)
     key.tex_offset = primitive->has_texcoord ? primitive->tex_offset : 0;
     key.color_offset = primitive->color_format ? primitive->color_offset : 0;
     fill_state_key(&key);
+    if (point_quads_active) {  // Points are never culled.
+        key.cull_mode = key.front_face = 0;
+    }
     key.depth_target_format = (uint8_t)depth_format;
     if (!depth_target) {
         key.depth_test = key.depth_write = key.depth_compare = 0;
@@ -1065,6 +1223,10 @@ void sdlgpu_record_draw(struct SysPrimitive *primitive, int first, int count)
     cmd->first = (uint32_t)first;
     cmd->count = (uint32_t)count;
     fill_common_draw_state(cmd);
+    if (point_quads_active) {
+        cmd->vs.transform = mat4_identity;
+        cmd->vs.fog_transform = point_quads_fog_transform;
+    }
 
     /* Texture and fragment shader texture mode. */
     struct SysTexture *texture = sdlgpu_current_texture;

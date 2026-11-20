@@ -180,6 +180,10 @@ extern void sdlgpu_defer_release_texture(SDL_GPUTexture *texture);
 /* Record a draw of the given primitive. */
 extern void sdlgpu_record_draw(struct SysPrimitive *primitive,
                                int first, int count);
+/* Return whether the driver ignores the vertex shader's point size
+ * (Direct3D 12), so that points larger than one pixel must be drawn as
+ * quads.  POINTS primitives then keep a CPU copy of their data. */
+extern int sdlgpu_emulate_point_size(void);
 /* Read pixels from a GPU texture into an RGBA buffer (blocking). */
 extern int sdlgpu_read_texture(SDL_GPUTexture *texture,
                                SDL_GPUTextureFormat format,
