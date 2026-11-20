@@ -17,7 +17,9 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#include <X11/Xlib.h>
+#ifndef SIL_USE_SDL
+# include <X11/Xlib.h>
+#endif
 
 /*************************************************************************/
 /*************************************************************************/
@@ -187,7 +189,11 @@ int sys_open_url(const char *url)
 
 void sys_reset_idle_timer(void)
 {
+#ifdef SIL_USE_SDL
+    /* SDL disables the screensaver itself while a window is open. */
+#else
     XResetScreenSaver(linux_x11_display());
+#endif
 }
 
 /*-----------------------------------------------------------------------*/

@@ -6,8 +6,10 @@
  *
  * src/sysdep/sdl/graphics.c: Display and window management for the SDL3
  * platform layer.  Rendering itself is handled by the SDL_GPU backend
- * (src/sysdep/sdlgpu); this file implements the window-related
- * sys_graphics_*() functions and forwards frame control to the backend.
+ * (src/sysdep/sdlgpu) or, with SIL_USE_SDL_GL, by the OpenGL backend
+ * (src/sysdep/opengl, context management in opengl.c); this file
+ * implements the window-related sys_graphics_*() functions and forwards
+ * frame control to the backend.
  */
 
 #define IN_SYSDEP
@@ -17,7 +19,13 @@
 #include "src/memory.h"
 #include "src/sysdep.h"
 #include "src/sysdep/sdl/internal.h"
-#include "src/sysdep/sdlgpu/sdlgpu.h"
+#ifdef SIL_USE_SDL_GL
+# include "src/sysdep/sdl/sdlgl.h"
+# define BACKEND(name)  sdlgl_##name
+#else
+# include "src/sysdep/sdlgpu/sdlgpu.h"
+# define BACKEND(name)  sdlgpu_##name
+#endif
 #include "src/texture.h"
 
 #include <stdarg.h>
@@ -120,6 +128,9 @@ static void do_create_window(void *userdata)
                            !attr_window);
     /* The window type must match the GPU driver (Direct3D 12 needs no
      * special window type). */
+#ifdef SIL_USE_SDL_GL
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_OPENGL_BOOLEAN, true);
+#else
     const char *driver = sdlgpu_driver_name();
     if (driver && strcmp(driver, "vulkan") == 0) {
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN,
@@ -128,6 +139,7 @@ static void do_create_window(void *userdata)
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_METAL_BOOLEAN,
                                true);
     }
+#endif
     sdl_window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     if (!sdl_window) {
@@ -273,7 +285,7 @@ const SysGraphicsInfo *sys_graphics_init(void)
 void sys_graphics_cleanup(void)
 {
     if (gpu_initialized) {
-        sdlgpu_cleanup();
+        BACKEND(cleanup)();
         gpu_initialized = 0;
     }
     sdl_run_on_main_thread(do_destroy_window, NULL);
@@ -323,6 +335,12 @@ int sys_graphics_set_display_attr(const char *name, va_list args)
         attr_device = value;
         return 1;
     }
+#ifdef SIL_USE_SDL_GL
+    int result;
+    if (sdlgl_set_display_attr(name, args, &result)) {
+        return result;
+    }
+#else
     if (strcmp(name, "gpu_driver") == 0) {
         /* SDL_GPU driver name ("metal", "vulkan", "direct3d12"), or NULL
          * for SDL's default choice.  Only effective before the first
@@ -338,6 +356,7 @@ int sys_graphics_set_display_attr(const char *name, va_list args)
         const int value = va_arg(args, int);
         return value == 1;  // Multisampling is not (yet) supported.
     }
+#endif
     if (strcmp(name, "refresh_rate") == 0) {
         const float value = (float)va_arg(args, double);
         if (value < 0) {
@@ -357,7 +376,7 @@ int sys_graphics_set_display_attr(const char *name, va_list args)
     if (strcmp(name, "vsync") == 0) {
         attr_vsync = (va_arg(args, int) != 0);
         if (gpu_initialized) {
-            sdlgpu_set_vsync(attr_vsync);
+            BACKEND(set_vsync)(attr_vsync);
         }
         return 1;
     }
@@ -369,12 +388,14 @@ int sys_graphics_set_display_attr(const char *name, va_list args)
         attr_resizable = (va_arg(args, int) != 0);
         return 1;
     }
+#ifndef SIL_USE_SDL_GL
     /* OpenGL-specific attributes are accepted and ignored so that
      * clients written for the OpenGL backend keep working. */
     if (strcmp(name, "opengl_debug") == 0
      || strcmp(name, "opengl_version") == 0) {
         return 1;
     }
+#endif
     return 0;
 }
 
@@ -382,10 +403,18 @@ int sys_graphics_set_display_attr(const char *name, va_list args)
 
 GraphicsError sys_graphics_set_display_mode(int width, int height)
 {
+#ifdef SIL_USE_SDL_GL
+    /* The GL attributes must be set before the window is created. */
+    if (!gpu_initialized
+     && !sdlgl_prepare_window(attr_depth_bits, attr_stencil_bits)) {
+        return GRAPHICS_ERROR_BACKEND_NOT_FOUND;
+    }
+#else
     /* The GPU device must exist before the window is created. */
     if (!gpu_initialized && !sdlgpu_create_device()) {
         return GRAPHICS_ERROR_BACKEND_NOT_FOUND;
     }
+#endif
 
     CreateWindowParams params = {.width = width, .height = height, .ok = 0};
     sdl_run_on_main_thread(do_create_window, &params);
@@ -394,14 +423,18 @@ GraphicsError sys_graphics_set_display_mode(int width, int height)
     }
 
     if (!gpu_initialized) {
+#ifdef SIL_USE_SDL_GL
+        if (!sdlgl_init(sdl_window, attr_vsync)) {
+#else
         if (!sdlgpu_init(sdl_window, attr_depth_bits, attr_stencil_bits,
                          attr_vsync)) {
+#endif
             sdl_run_on_main_thread(do_destroy_window, NULL);
             return GRAPHICS_ERROR_BACKEND_NOT_FOUND;
         }
         gpu_initialized = 1;
     } else {
-        sdlgpu_set_vsync(attr_vsync);
+        BACKEND(set_vsync)(attr_vsync);
     }
     sdl_run_on_main_thread(do_update_cursor, NULL);
     return GRAPHICS_ERROR_SUCCESS;
@@ -510,7 +543,7 @@ void sys_graphics_start_frame(int *width_ret, int *height_ret)
         return;
     }
     sdl_graphics_window_size(width_ret, height_ret);
-    sdlgpu_start_frame(*width_ret, *height_ret);
+    BACKEND(start_frame)(*width_ret, *height_ret);
 }
 
 /*-----------------------------------------------------------------------*/
@@ -518,7 +551,7 @@ void sys_graphics_start_frame(int *width_ret, int *height_ret)
 void sys_graphics_finish_frame(void)
 {
     if (gpu_initialized) {
-        sdlgpu_finish_frame();
+        BACKEND(finish_frame)();
     }
 }
 
@@ -527,7 +560,7 @@ void sys_graphics_finish_frame(void)
 void sys_graphics_sync(int flush)
 {
     if (gpu_initialized) {
-        sdlgpu_sync(flush);
+        BACKEND(sync)(flush);
     }
 }
 

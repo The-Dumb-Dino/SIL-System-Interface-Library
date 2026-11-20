@@ -94,8 +94,44 @@ SYS_CXXFLAGS  = $(TARGET_FLAGS)
 SYS_OBJCFLAGS = $(TARGET_FLAGS)
 SYS_LDFLAGS   = $(TARGET_FLAGS)
 
+#----------------------- SDL3 platform layer options ----------------------#
+
+# $(SIL_USE_SDLGPU):  Set to 1 to use the SDL3 platform layer
+# (src/sysdep/sdl) and the SDL_GPU rendering backend (Vulkan) instead of
+# the X11/GLX window/input code and the OpenGL backend.
+#
+# $(SIL_USE_SDL_GL):  Set to 1 to use the SDL3 platform layer with the
+# OpenGL rendering backend (src/sysdep/opengl).  SDL3 creates the window
+# and GL context, so this works on X11, Wayland and KMS/DRM (no window
+# system) alike.
+#
+# $(SIL_USE_GLES):  With SIL_USE_SDL_GL=1, set to 1 to use OpenGL ES
+# (3.x, falling back to 2.0) instead of desktop OpenGL.
+#
+# All of these require SDL3 (found with pkg-config if available, else
+# -lSDL3; or set SDL3_CFLAGS / SDL3_LIBS).
+
+SIL_USE_SDLGPU ?= 0
+SIL_USE_SDL_GL ?= 0
+SIL_USE_GLES ?= 0
+ifeq ($(SIL_USE_SDLGPU)$(SIL_USE_SDL_GL),11)
+    $(error SIL_USE_SDLGPU and SIL_USE_SDL_GL are mutually exclusive)
+endif
+ifeq ($(SIL_USE_GLES)$(SIL_USE_SDL_GL),10)
+    $(error SIL_USE_GLES=1 requires SIL_USE_SDL_GL=1)
+endif
+_SIL_USE_SDL := $(if $(filter 1,$(SIL_USE_SDLGPU) $(SIL_USE_SDL_GL)),1,0)
+ifeq ($(_SIL_USE_SDL),1)
+_SDL3_PKGCONFIG := $(shell pkg-config --exists sdl3 2>/dev/null && echo 1)
+SDL3_CFLAGS ?= $(if $(_SDL3_PKGCONFIG),$(shell pkg-config --cflags sdl3))
+SDL3_LIBS ?= $(if $(_SDL3_PKGCONFIG),$(shell pkg-config --libs sdl3),-lSDL3)
+endif
+
+# The SDL builds load the GL library through SDL at runtime, so they don't
+# link against libGL or libX11.
 BASE_LIBS = $(if $(filter 1,$(USE_FFMPEG)),-lavcodec -lavformat -lavresample -lavutil) \
-            -lGL -lX11 -lasound -ldl -lm -lpthread -lrt
+            $(if $(filter 1,$(_SIL_USE_SDL)),$(SDL3_LIBS),-lGL -lX11) \
+            -lasound -ldl -lm -lpthread -lrt
 
 include $(_THISDIR)/../common/toolchain.mk
 
@@ -107,16 +143,34 @@ CC_LD = $(if $(filter 1,$(SIL_LINK_CXX_STL)),$(CXX),$(CC))
 
 SIL_SYS_CONFIG_HEADER = linux.h
 
-SIL_SYS_SOURCES = $(SIL_OPENGL_SOURCES) \
+ifeq ($(_SIL_USE_SDL),1)
+_SIL_GRAPHICS_SOURCES = sysdep/sdl/graphics.c \
+                        sysdep/sdl/input.c \
+                        sysdep/sdl/main.c \
+                        sysdep/misc/sysfont-none.c \
+                        $(if $(filter 1,$(SIL_USE_SDLGPU)), \
+                            sysdep/sdlgpu/base.c \
+                            sysdep/sdlgpu/primitive.c \
+                            sysdep/sdlgpu/shader.c \
+                            sysdep/sdlgpu/texture.c \
+                        , \
+                            $(SIL_OPENGL_SOURCES) \
+                            sysdep/sdl/opengl.c \
+                        )
+else
+_SIL_GRAPHICS_SOURCES = $(SIL_OPENGL_SOURCES) \
+                        sysdep/linux/graphics.c \
+                        sysdep/linux/input.c \
+                        sysdep/linux/main.c \
+                        sysdep/linux/sysfont.c
+endif
+
+SIL_SYS_SOURCES = $(_SIL_GRAPHICS_SOURCES) \
                   sysdep/linux/debug.c \
-                  sysdep/linux/graphics.c \
-                  sysdep/linux/input.c \
-                  sysdep/linux/main.c \
                   sysdep/linux/meminfo.c \
                   sysdep/linux/misc.c \
                   sysdep/linux/movie.c \
                   sysdep/linux/sound.c \
-                  sysdep/linux/sysfont.c \
                   sysdep/linux/thread.c \
                   sysdep/linux/userdata.c \
                   sysdep/misc/ioqueue.c \
@@ -172,6 +226,11 @@ SIL_SYS_FLAGS = $(CFLAG_DEFINE)SIL_OPENGL_TEXTURE_BUFFER_ALIGNMENT=32 \
 
 # Declare that we follow POSIX.
 SIL_SYS_FLAGS += $(CFLAG_DEFINE)_POSIX_C_SOURCE=200809L
+
+SIL_SYS_FLAGS += $(if $(filter 1,$(_SIL_USE_SDL)),$(CFLAG_DEFINE)SIL_USE_SDL $(SDL3_CFLAGS)) \
+                 $(if $(filter 1,$(SIL_USE_SDLGPU)),$(CFLAG_DEFINE)SIL_USE_SDLGPU) \
+                 $(if $(filter 1,$(SIL_USE_SDL_GL)),$(CFLAG_DEFINE)SIL_USE_SDL_GL) \
+                 $(if $(filter 1,$(SIL_USE_GLES)),$(CFLAG_DEFINE)SIL_OPENGL_ES)
 
 include $(_THISDIR)/../common/sources.mk
 

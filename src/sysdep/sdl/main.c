@@ -104,6 +104,20 @@ const char *windows_executable_dir(void)
 
 #endif  // SIL_PLATFORM_WINDOWS
 
+/*-----------------------------------------------------------------------*/
+
+#ifdef SIL_PLATFORM_LINUX
+
+/* The Linux sysdep files (src/sysdep/linux/misc.c) expect this from
+ * main.c, which the SDL layer replaces. */
+const char *linux_executable_dir(void);
+const char *linux_executable_dir(void)
+{
+    return resource_dir ? resource_dir : ".";
+}
+
+#endif  // SIL_PLATFORM_LINUX
+
 /*************************************************************************/
 /***************************** Entry point *******************************/
 /*************************************************************************/
