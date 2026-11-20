@@ -118,8 +118,14 @@ static void do_create_window(void *userdata)
                            attr_resizable);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
                            !attr_window);
-    /* The SDL_GPU Metal backend needs a Metal-capable window. */
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_METAL_BOOLEAN, true);
+    /* The window type must match the GPU driver. */
+    if (sdlgpu_driver_is_vulkan()) {
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN,
+                               true);
+    } else {
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_METAL_BOOLEAN,
+                               true);
+    }
     sdl_window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     if (!sdl_window) {
@@ -315,6 +321,17 @@ int sys_graphics_set_display_attr(const char *name, va_list args)
         attr_device = value;
         return 1;
     }
+    if (strcmp(name, "gpu_driver") == 0) {
+        /* SDL_GPU driver name ("metal", "vulkan", "direct3d12"), or NULL
+         * for SDL's default choice.  Only effective before the first
+         * graphics_set_display_mode() call. */
+        const char *value = va_arg(args, const char *);
+        if (gpu_initialized) {
+            return 0;
+        }
+        SDL_SetHint(SDL_HINT_GPU_DRIVER, value);
+        return 1;
+    }
     if (strcmp(name, "multisample") == 0) {
         const int value = va_arg(args, int);
         return value == 1;  // Multisampling is not (yet) supported.
@@ -363,6 +380,11 @@ int sys_graphics_set_display_attr(const char *name, va_list args)
 
 GraphicsError sys_graphics_set_display_mode(int width, int height)
 {
+    /* The GPU device must exist before the window is created. */
+    if (!gpu_initialized && !sdlgpu_create_device()) {
+        return GRAPHICS_ERROR_BACKEND_NOT_FOUND;
+    }
+
     CreateWindowParams params = {.width = width, .height = height, .ok = 0};
     sdl_run_on_main_thread(do_create_window, &params);
     if (!params.ok) {

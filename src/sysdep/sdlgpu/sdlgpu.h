@@ -20,8 +20,26 @@ struct SDL_Window;
 /*************************************************************************/
 
 /**
- * sdlgpu_init:  Create the SDL_GPU device for the given window and
- * initialize the rendering state.
+ * sdlgpu_create_device:  Create the SDL_GPU device, if not yet created.
+ * Must be called before the window is created, since the window type
+ * depends on the driver (see sdlgpu_driver_is_vulkan()).  The driver can
+ * be chosen with the SDL hint SDL_GPU_DRIVER ("metal", "vulkan", ...).
+ *
+ * [Return value]
+ *     True on success, false on error.
+ */
+extern int sdlgpu_create_device(void);
+
+/**
+ * sdlgpu_driver_is_vulkan:  Return whether the created device uses the
+ * Vulkan driver (the window must then be created with SDL_WINDOW_VULKAN
+ * instead of SDL_WINDOW_METAL).
+ */
+extern int sdlgpu_driver_is_vulkan(void);
+
+/**
+ * sdlgpu_init:  Attach the SDL_GPU device (see sdlgpu_create_device())
+ * to the given window and initialize the rendering state.
  *
  * [Parameters]
  *     window: Window to render into.

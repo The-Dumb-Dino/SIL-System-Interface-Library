@@ -13,10 +13,13 @@
  * controlled by uniforms.  Custom shaders (shader.h, shader generators)
  * are not supported by this backend.
  *
- * Currently only MSL (Metal) source is provided; SDL compiles it at
- * runtime.  Vulkan (SPIR-V) and Direct3D 12 (DXIL/DXBC) would need the
- * same shaders compiled offline (e.g. with SDL_shadercross) and embedded
- * here, selected by SDL_GetGPUShaderFormats().
+ * Two shader languages are provided, chosen by what the GPU driver
+ * accepts (SDL_GetGPUShaderFormats()):
+ *   - MSL source (Metal), compiled by SDL at runtime;
+ *   - SPIR-V (Vulkan), compiled offline from shaders/default.{vert,frag}
+ *     by shaders/build-shaders.sh into shaders-spirv.i.
+ * Direct3D 12 would additionally need DXIL/DXBC; on Windows SIL already has
+ * its own Direct3D 11 backend.
  */
 
 #define IN_SYSDEP
@@ -139,6 +142,8 @@ static const char msl_fragment[] =
     "    return color;\n"
     "}\n";
 
+#include "src/sysdep/sdlgpu/shaders-spirv.i"
+
 /*************************************************************************/
 /****************************** Local data *******************************/
 /*************************************************************************/
@@ -190,12 +195,65 @@ static SDL_GPUShader *create_msl_shader(SDL_GPUShaderStage stage,
 
 /*-----------------------------------------------------------------------*/
 
+static SDL_GPUShader *create_spirv_shader(SDL_GPUShaderStage stage,
+                                          const uint8_t *code, size_t size)
+{
+    SDL_GPUShaderCreateInfo info;
+    mem_clear(&info, sizeof(info));
+    info.code = code;
+    info.code_size = size;
+    info.entrypoint = "main";
+    info.format = SDL_GPU_SHADERFORMAT_SPIRV;
+    info.stage = stage;
+    info.num_uniform_buffers = 1;
+    info.num_samplers = (stage == SDL_GPU_SHADERSTAGE_FRAGMENT) ? 1 : 0;
+    SDL_GPUShader *shader = SDL_CreateGPUShader(sdlgpu_device, &info);
+    if (!shader) {
+        DLOG("Failed to create SPIR-V %s shader: %s",
+             stage == SDL_GPU_SHADERSTAGE_VERTEX ? "vertex" : "fragment",
+             SDL_GetError());
+    }
+    return shader;
+}
+
+/*-----------------------------------------------------------------------*/
+
 int sdlgpu_shader_init(void)
 {
     const SDL_GPUShaderFormat formats = SDL_GetGPUShaderFormats(sdlgpu_device);
+
+    if (formats & SDL_GPU_SHADERFORMAT_SPIRV) {
+        static const struct {const uint8_t *code; size_t size;} vs[2][2] = {
+            {{spirv_vertex_t0_c0, sizeof(spirv_vertex_t0_c0)},
+             {spirv_vertex_t0_c1, sizeof(spirv_vertex_t0_c1)}},
+            {{spirv_vertex_t1_c0, sizeof(spirv_vertex_t1_c0)},
+             {spirv_vertex_t1_c1, sizeof(spirv_vertex_t1_c1)}},
+        };
+        shader_language = "SPIR-V";
+        for (int tex = 0; tex < 2; tex++) {
+            for (int color = 0; color < 2; color++) {
+                vertex_shaders[tex][color] = create_spirv_shader(
+                    SDL_GPU_SHADERSTAGE_VERTEX, vs[tex][color].code,
+                    vs[tex][color].size);
+                if (!vertex_shaders[tex][color]) {
+                    sdlgpu_shader_cleanup();
+                    return 0;
+                }
+            }
+        }
+        fragment_shader = create_spirv_shader(
+            SDL_GPU_SHADERSTAGE_FRAGMENT, spirv_fragment,
+            sizeof(spirv_fragment));
+        if (!fragment_shader) {
+            sdlgpu_shader_cleanup();
+            return 0;
+        }
+        return 1;
+    }
+
     if (!(formats & SDL_GPU_SHADERFORMAT_MSL)) {
-        DLOG("No supported shader format (have 0x%X; only MSL implemented)",
-             formats);
+        DLOG("No supported shader format (driver accepts 0x%X; MSL and"
+             " SPIR-V are implemented)", formats);
         return 0;
     }
     shader_language = "MSL";

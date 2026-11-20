@@ -166,13 +166,11 @@ static SDL_GPUStencilOp convert_stencil_op(int op);
 /*************** Platform interface (see sdlgpu.h) ***********************/
 /*************************************************************************/
 
-int sdlgpu_init(SDL_Window *window_, int depth_bits, int stencil_bits,
-                int vsync)
+int sdlgpu_create_device(void)
 {
-    window = window_;
-    requested_depth_bits = depth_bits;
-    requested_stencil_bits = stencil_bits;
-
+    if (sdlgpu_device) {
+        return 1;
+    }
     const int debug =
 #ifdef DEBUG
         SDL_GetHintBoolean("SIL_SDLGPU_DEBUG", false);
@@ -180,10 +178,36 @@ int sdlgpu_init(SDL_Window *window_, int depth_bits, int stencil_bits,
         0;
 #endif
     sdlgpu_device = SDL_CreateGPUDevice(
-        SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_METALLIB,
+        SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_METALLIB
+            | SDL_GPU_SHADERFORMAT_SPIRV,
         debug, NULL);
     if (!sdlgpu_device) {
         DLOG("SDL_CreateGPUDevice() failed: %s", SDL_GetError());
+        return 0;
+    }
+    DLOG("SDL_GPU device created: driver=%s",
+         SDL_GetGPUDeviceDriver(sdlgpu_device));
+    return 1;
+}
+
+/*-----------------------------------------------------------------------*/
+
+int sdlgpu_driver_is_vulkan(void)
+{
+    return sdlgpu_device
+        && strcmp(SDL_GetGPUDeviceDriver(sdlgpu_device), "vulkan") == 0;
+}
+
+/*-----------------------------------------------------------------------*/
+
+int sdlgpu_init(SDL_Window *window_, int depth_bits, int stencil_bits,
+                int vsync)
+{
+    window = window_;
+    requested_depth_bits = depth_bits;
+    requested_stencil_bits = stencil_bits;
+
+    if (!sdlgpu_create_device()) {
         return 0;
     }
     if (!SDL_ClaimWindowForGPUDevice(sdlgpu_device, window)) {
@@ -214,8 +238,6 @@ int sdlgpu_init(SDL_Window *window_, int depth_bits, int stencil_bits,
         return 0;
     }
 
-    DLOG("SDL_GPU device created: driver=%s",
-         SDL_GetGPUDeviceDriver(sdlgpu_device));
     return 1;
 }
 
