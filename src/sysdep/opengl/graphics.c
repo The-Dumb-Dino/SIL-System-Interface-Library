@@ -1095,11 +1095,20 @@ static void set_features(uint32_t features)
         features_avail |= OPENGL_FEATURE_DISCARD_FRAMEBUFFER;
     }
 
-    if (opengl_has_extension("GL_EXT_texture_format_BGRA8888")
-        /* Apple apparently doesn't believe in following standards... */
-     || opengl_has_extension("GL_APPLE_texture_format_BGRA8888")) {
-        /* Some GLES implementations also advertise GL_EXT_bgra, but
-         * apparently that extension name is only valid for non-ES OpenGL. */
+    /* Some GLES implementations also advertise GL_EXT_bgra, but apparently
+     * that extension name is only valid for non-ES OpenGL. */
+    if (opengl_has_extension("GL_APPLE_texture_format_BGRA8888")) {
+        /* Apple apparently doesn't believe in following standards, but
+         * in this case it helps: BGRA data can be uploaded to RGBA
+         * textures. */
+        formats_supported |= OPENGL_FORMAT_BGRA;
+    } else if (opengl_has_extension("GL_EXT_texture_format_BGRA8888")
+               && !opengl_version_is_at_least(3,0)) {
+        /* GL_EXT_texture_format_BGRA8888 only allows BGRA data to be
+         * uploaded to textures created with the BGRA_EXT format.  With
+         * GLES 3.0+, we allocate immutable GL_RGBA8 storage with
+         * glTexStorage2D(), so BGRA uploads fail with GL_INVALID_ENUM
+         * (seen with Mesa and ARM Mali); we convert on the CPU instead. */
         formats_supported |= OPENGL_FORMAT_BGRA;
     }
 #ifdef SIL_PLATFORM_ANDROID
