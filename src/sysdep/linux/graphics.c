@@ -4178,8 +4178,15 @@ static int should_minimize_fullscreen(void)
 
 static int setup_opengl(int width, int height)
 {
+    /* Immediate-mode data is passed in client memory unless we have a
+     * core profile context (which requires VBOs).  With Mesa, uploading
+     * through SIL's ring of immediate-mode VBOs is slower even for
+     * single sprites and stalls badly when upload sizes vary (as with
+     * batching): 20,000 sprites with frequent texture changes run at
+     * ~1 FPS instead of ~47 FPS on an Apple M1 with Asahi Mesa. */
     const uint32_t gl_flags = OPENGL_FEATURE_FAST_STATIC_VBO
-                            | OPENGL_FEATURE_FAST_DYNAMIC_VBO
+                            | (desired_opengl_major >= 3
+                               ? OPENGL_FEATURE_FAST_DYNAMIC_VBO : 0)
                             | OPENGL_FEATURE_NATIVE_QUADS
                             | OPENGL_FEATURE_GENERATEMIPMAP;
     if (UNLIKELY(!opengl_init(width, height, gl_flags))) {
